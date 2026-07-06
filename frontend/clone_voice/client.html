@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SyntaxMatrix Clone Voice</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/clone_voice/client.css?v=clean1">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <p class="eyebrow">SyntaxMatrix Media Studio</p>
+      <h1>Clone Voice</h1>
+      <p>Upload audio, record your voice, or generate narration from a reusable system voice.</p>
+    </header>
+
+    <section class="card">
+      <div class="tabs" role="tablist" aria-label="Voice source">
+        <button class="tab active" id="uploadTab" type="button" data-mode="upload">Upload audio</button>
+        <button class="tab" id="recordTab" type="button" data-mode="record">Record my voice</button>
+        <button class="tab" id="systemTab" type="button" data-mode="system">System voice</button>
+      </div>
+
+      <form id="cloneVoiceForm">
+        <div class="panel" id="uploadPanel">
+          <label>
+            Upload audio file
+            <input id="audioInput" name="audio" type="file" accept="audio/*">
+          </label>
+          <p class="status" id="uploadStatus">No uploaded file selected.</p>
+        </div>
+
+        <div class="panel" id="recordPanel" hidden>
+          <div class="inner-card">
+            <h3 id="recordingTitle">Recorder ready</h3>
+            <p class="status" id="recordingStatus">Start recording, speak clearly, then stop. The recording will be sent as a WAV file.</p>
+            <div class="row-actions">
+              <button class="secondary" id="startRecording" type="button">Start recording</button>
+              <button class="secondary" id="stopRecording" type="button" disabled>Stop recording</button>
+              <button class="secondary" id="discardRecording" type="button" disabled>Discard recording</button>
+            </div>
+            <audio id="recordedPreview" controls hidden></audio>
+          </div>
+        </div>
+
+        <div class="panel" id="systemPanel" hidden>
+          <div class="inner-card">
+            <h3>System voices</h3>
+            <p class="status">Reusable system voice parameters are loaded from <code>voices/params/</code>. Preview audio is loaded from <code>voices/previews/</code>.</p>
+            <button class="secondary wide" id="toggleSystemVoices" type="button">Show system voices</button>
+            <div id="systemVoiceList" class="system-list" hidden></div>
+          </div>
+        </div>
+
+        <label>
+          Narration text
+          <textarea id="promptInput" name="prompt" required placeholder="Paste narration text here"></textarea>
+        </label>
+
+        <button id="submitBtn" type="submit">Generate narration</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2 id="resultTitle">No narration yet</h2>
+      <div id="audioResult"></div>
+      <pre id="resultBox">No request sent yet.</pre>
+    </section>
+  </main>
+
+  <script src="/clone_voice/client.js?v=clean1"></script>
+</body>
+</html>

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SyntaxMatrix Voice Clone Admin</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/voice_clone.css" />
+</head>
+<body class="feature-page">
+  <main class="feature-shell">
+    <header class="feature-header">
+      <a class="feature-back" href="/">← Studio</a>
+      <p class="eyebrow">SyntaxMatrix Admin</p>
+      <h1>Voice Clone Admin</h1>
+      <p>Review source recordings, saved voice profiles, previews and generated narration assets.</p>
+      <nav class="feature-nav" aria-label="Voice Clone views">
+        <a href="/tasks/voice-clone">Client view</a>
+        <a class="active" href="/admin/voice-clone">Admin view</a>
+      </nav>
+    </header>
+
+    <section class="admin-summary-grid" id="adminSummary"></section>
+
+    <section class="feature-card">
+      <div class="section-heading compact row-heading">
+        <div>
+          <p class="eyebrow">Controller state</p>
+          <h2>Voice assets</h2>
+        </div>
+        <button class="secondary-button" id="refreshAdmin" type="button">Refresh</button>
+      </div>
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Name</th>
+              <th>Size</th>
+              <th>Modified</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="adminRows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+  <script src="/voice_clone_admin.js" defer></script>
+</body>
+</html>

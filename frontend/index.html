@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta id="EMERGENCY_UNFREEZE_NO_CACHE" http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<script id="EMERGENCY_UNFREEZE_ERROR_GUARD">
+  window.addEventListener('error', function (event) {
+    console.error('[SyntaxMatrix frontend error]', event.error || event.message);
+  });
+  window.addEventListener('unhandledrejection', function (event) {
+    console.error('[SyntaxMatrix promise error]', event.reason);
+  });
+  try {
+    localStorage.removeItem('syntaxmatrix-media-studio-state-v1');
+    sessionStorage.setItem('syntaxmatrix-media-emergency-unfreeze', '20260630141312');
+  } catch (e) {
+    console.warn('Could not clear frontend state', e);
+  }
+</script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>SyntaxMatrix Media Studio</title>
+  <link rel="stylesheet" href="./styles.css?v=emergency-20260630141312" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Primary navigation">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">SM</div>
+        <div>
+          <p class="eyebrow">SyntaxMatrix</p>
+          <h1>Media Studio</h1>
+        </div>
+      </div>
+
+      <nav class="nav-links" aria-label="Studio sections">
+        <a class="nav-link active" href="#overview" data-section-link="overview"><span>⌘</span> Overview</a>
+        <a class="nav-link" href="/tasks/clone-voice"><span>✦</span> Clone Voice</a>
+<a class="nav-link" href="#create" data-section-link="create"><span>✦</span> Create</a>
+        <a class="nav-link" href="#assets" data-section-link="assets"><span>▣</span> Assets</a>
+        <a class="nav-link" href="#models" data-section-link="models"><span>◇</span> Models</a>
+        <a class="nav-link" href="#settings" data-section-link="settings"><span>⚙</span> Settings</a>
+      </nav>
+
+      <div class="sidebar-card">
+        <p class="eyebrow">Production readiness</p>
+        <strong>Front-end adapter ready</strong>
+        <span>Connect the API base URL when your backend endpoints are exposed.</span>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <button class="icon-button mobile-menu" id="menuButton" aria-label="Open navigation" aria-expanded="false">☰</button>
+        <div>
+          <p class="eyebrow">Enterprise creative operations</p>
+          <h2>Generate images, videos and cloned voice assets from one console.</h2>
+        </div>
+        <div class="topbar-actions">
+          <button class="ghost-button" id="themeButton" type="button">Toggle theme</button>
+          <button class="primary-button" type="button" data-scroll-target="create">New generation</button>
+        </div>
+      </header>
+
+      <section class="hero section" id="overview" data-section="overview">
+        <div class="hero-copy">
+          <div class="pill">Qwen Image • Wan Video • Qwen Voice</div>
+          <h2>Flask-powered control plane for SyntaxMatrix media production.</h2>
+          <p>
+            A polished Flask app for creative teams: text-to-image, ordered edit-to-image uploads, text-to-video,
+            image-to-video, voice cloning, job history and asset review.
+          </p>
+          <div class="hero-actions">
+            <button class="primary-button" type="button" data-scroll-target="create">Start creating</button>
+            <button class="secondary-button" type="button" data-scroll-target="settings">Configure API</button>
+          </div>
+        </div>
+        <div class="hero-panel" aria-label="Studio status summary">
+          <div class="glow-orb"></div>
+          <div class="status-row">
+            <span>Studio mode</span>
+            <strong id="studioModeLabel">Flask live</strong>
+          </div>
+          <div class="status-row">
+            <span>Backend</span>
+            <strong id="backendStatus">Not checked</strong>
+          </div>
+          <div class="metric-grid">
+            <div>
+              <span>Jobs</span>
+              <strong id="jobCount">0</strong>
+            </div>
+            <div>
+              <span>Assets</span>
+              <strong id="assetCount">0</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="stats-grid" aria-label="Studio metrics">
+        <article class="stat-card">
+          <span class="stat-icon">▣</span>
+          <p>Total generations</p>
+          <strong id="totalGenerations">0</strong>
+        </article>
+        <article class="stat-card">
+          <span class="stat-icon">◉</span>
+          <p>Ready assets</p>
+          <strong id="readyAssets">0</strong>
+        </article>
+        <article class="stat-card">
+          <span class="stat-icon">◌</span>
+          <p>Draft prompts</p>
+          <strong id="draftPrompts">5</strong>
+        </article>
+        <article class="stat-card">
+          <span class="stat-icon">✧</span>
+          <p>Active models</p>
+          <strong>5</strong>
+        </article>
+      </section>
+
+      <section class="section studio-grid" id="create" data-section="create">
+        <div class="section-heading">
+          <p class="eyebrow">Creation console</p>
+          <h2>Choose a workflow</h2>
+          <p>Each workflow is validated in the browser before being submitted to the Flask backend.</p>
+        </div>
+
+        <div class="studio-card">
+          <div class="tabs" role="tablist" aria-label="Generation workflow">
+            <button class="tab active" type="button" role="tab" aria-selected="true" data-workflow="textToImage">Text → Image</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-workflow="editToImage">Edit → Image</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-workflow="textToVideo">Text → Video</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-workflow="imageToVideo">Image → Video</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-workflow="voiceClone">Clone Voice</button>
+          </div>
+
+          <form class="generation-form" id="generationForm">
+            <div class="form-grid">
+              <label>
+                <span>Model</span>
+                <select id="modelSelect" name="model"></select>
+              </label>
+              <label>
+                <span>Output quality</span>
+                <select id="qualitySelect" name="quality">
+                  <option value="standard">Standard</option>
+                  <option value="premium" selected>Premium</option>
+                  <option value="cinematic">Cinematic</option>
+                </select>
+              </label>
+            </div>
+
+            <label id="promptGroup">
+              <span>Prompt / creative brief</span>
+              <textarea id="promptInput" name="prompt" rows="7" placeholder="Describe the media asset you want to produce..."></textarea>
+            </label>
+
+            <div class="prompt-toolbar">
+              <button class="chip" type="button" data-prompt="A cinematic brand launch video in Dublin, premium lighting, subtle camera motion, realistic human expressions, elegant corporate tone.">Brand launch</button>
+              <button class="chip" type="button" data-prompt="A high-end product advertisement with clean studio lighting, luxury texture, soft shadows and refined visual composition.">Product ad</button>
+              <button class="chip" type="button" data-prompt="Create an editorial portrait with warm light, natural skin texture, confident expression, premium campaign styling.">Editorial portrait</button>
+            </div>
+
+            <div class="form-grid optional-fields" id="mediaOptions">
+              <label data-field="size">
+                <span>Image size</span>
+                <select id="sizeSelect" name="size">
+                  <option value="1328*1328" selected>1328 × 1328</option>
+                  <option value="1024*1024">1024 × 1024</option>
+                  <option value="1280*720">1280 × 720</option>
+                  <option value="720*1280">720 × 1280</option>
+                </select>
+              </label>
+              <label data-field="resolution">
+                <span>Video resolution</span>
+                <select id="resolutionSelect" name="resolution">
+                  <option value="720P">720P</option>
+                  <option value="1080P" selected>1080P</option>
+                </select>
+              </label>
+              <label data-field="duration">
+                <span>Duration</span>
+                <select id="durationSelect" name="duration">
+                  <option value="5">5 seconds</option>
+                  <option value="10" selected>10 seconds</option>
+                </select>
+              </label>
+              <label data-field="seed">
+                <span>Seed</span>
+                <input id="seedInput" name="seed" type="number" placeholder="Optional deterministic seed" />
+              </label>
+            </div>
+
+            <div class="upload-panel" id="imageUploadPanel" hidden>
+              <div>
+                <span class="field-title">Reference images</span>
+                <p>Upload up to three files for image editing or image-to-video workflows.</p>
+              </div>
+              <label class="dropzone" for="imageFiles">
+                <input id="imageFiles" name="imageFiles" type="file" accept="image/*" multiple />
+                <strong>Drop images here or browse</strong>
+                <span>PNG, JPG or WEBP. Maximum 3 for edit-to-image.</span>
+              </label>
+              <div class="preview-strip" id="imagePreviewStrip" aria-live="polite"></div>
+            </div>
+
+            <div class="upload-panel" id="voiceUploadPanel" hidden>
+              <div>
+                <span class="field-title">Voice source</span>
+                <p>Upload a clean source recording for enrollment and preview generation.</p>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>Preferred voice name</span>
+                  <input id="voiceNameInput" name="voiceName" type="text" value="smxVoice" />
+                </label>
+                <label>
+                  <span>Audio file</span>
+                  <input id="voiceFile" name="voiceFile" type="file" accept="audio/*" />
+                </label>
+              </div>
+            </div>
+
+            <div class="advanced-panel">
+              <button class="inline-toggle" type="button" id="advancedToggle" aria-expanded="false">Show advanced controls</button>
+              <div class="advanced-content" id="advancedContent" hidden>
+                <label class="checkbox-row">
+                  <input id="watermarkInput" name="watermark" type="checkbox" />
+                  <span>Add watermark</span>
+                </label>
+                <label class="checkbox-row">
+                  <input id="promptExtendInput" name="promptExtend" type="checkbox" checked />
+                  <span>Use prompt extension</span>
+                </label>
+                <label>
+                  <span>Negative prompt</span>
+                  <textarea id="negativePromptInput" name="negativePrompt" rows="3" placeholder="Optional: things to avoid..."></textarea>
+                </label>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button class="secondary-button" id="resetFormButton" type="reset">Reset</button>
+              <button class="primary-button" id="submitButton" type="submit">Generate asset</button>
+            </div>
+          </form>
+        </div>
+
+        <aside class="result-card" aria-live="polite">
+          <div class="result-header">
+            <div>
+              <p class="eyebrow">Live output</p>
+              <h3 id="resultTitle">No job selected</h3>
+            </div>
+            <span class="badge" id="resultBadge">Idle</span>
+          </div>
+          <div class="result-preview" id="resultPreview">
+            <span>Generated media will appear here when your backend returns an asset URL.</span>
+          </div>
+          <dl class="result-meta" id="resultMeta">
+            <div><dt>Workflow</dt><dd>—</dd></div>
+            <div><dt>Model</dt><dd>—</dd></div>
+            <div><dt>Created</dt><dd>—</dd></div>
+          </dl>
+        </aside>
+      </section>
+
+      <section class="section" id="assets" data-section="assets">
+        <div class="section-heading row-heading">
+          <div>
+            <p class="eyebrow">Asset operations</p>
+            <h2>Generation history</h2>
+            <p>Recent jobs are stored locally in the browser. Flask handles uploads and feature controller requests.</p>
+          </div>
+          <button class="ghost-button danger" id="clearHistoryButton" type="button">Clear local history</button>
+        </div>
+        <div class="asset-grid" id="assetGrid"></div>
+      </section>
+
+      <section class="section" id="models" data-section="models">
+        <div class="section-heading">
+          <p class="eyebrow">Model registry</p>
+          <h2>SyntaxMatrix production model map</h2>
+          <p>These defaults reflect the models currently wired into the feature controllers.</p>
+        </div>
+        <div class="model-grid" id="modelGrid"></div>
+      </section>
+
+      <section class="section settings-card" id="settings" data-section="settings">
+        <div class="section-heading">
+          <p class="eyebrow">Integration settings</p>
+          <h2>Backend adapter</h2>
+          <p>Set the API base URL and endpoint paths that your Python/FastAPI/Flask adapter will expose.</p>
+        </div>
+        <form class="settings-form" id="settingsForm">
+          <label>
+            <span>API base URL</span>
+            <input id="apiBaseUrl" type="url" placeholder="http://127.0.0.1:5055" />
+          </label>
+          <label class="checkbox-row">
+            <input id="demoModeInput" type="checkbox" checked />
+            <span>Use demo-safe fallback when backend is unavailable</span>
+          </label>
+          <div class="endpoint-grid" id="endpointGrid"></div>
+          <div class="form-actions">
+            <button class="secondary-button" id="checkBackendButton" type="button">Check backend</button>
+            <button class="primary-button" type="submit">Save settings</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+  <script src="./app.js?v=emergency-20260630141312" type="module"></script>
+<script src="./asset_actions.js?v=20260630142358" defer></script>
+<script src="/voice_preview_toggle_fix.js?v=20260705123613" defer></script>
+<script src="/voice_upload_submit_fix.js?v=20260705135933" defer></script>
+<script src="/clone_voice_debug_client.js?v=20260705143741" defer></script>
+</body>
+</html>

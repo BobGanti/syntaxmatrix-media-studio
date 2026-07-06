@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SyntaxMatrix Voice Narration</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/voice_clone.css?v=voice-v3" />
+</head>
+<body class="feature-page voice-client-page voice-v3-active">
+  <main class="feature-shell">
+    <header class="feature-header">
+      <a class="feature-back" href="/">← Studio</a>
+      <p class="eyebrow">SyntaxMatrix Media Studio</p>
+      <h1>Voice Narration</h1>
+      <p>Create or choose a voice identity, then generate narration from your script.</p>
+      <p class="voice-build-marker">VOICE FLOW V3 ACTIVE</p>
+    </header>
+
+    <section class="feature-grid voice-client-grid">
+      <form id="voiceCloneForm" class="feature-card voice-client-card" enctype="multipart/form-data">
+        <div class="section-heading compact">
+          <p class="eyebrow">Client workflow</p>
+          <h2>Create narration</h2>
+          <p>Uploaded and recorded voices must first be saved as a private voice identity. System preview voices are shared presets.</p>
+        </div>
+
+        <input id="voiceModel" name="model" type="hidden" value="qwen3-tts-vc-2026-01-22" />
+
+        <section class="voice-source-section">
+          <div class="voice-source-header">
+            <div>
+              <p class="eyebrow">Voice source</p>
+              <h3>Choose or create a voice identity</h3>
+            </div>
+            <button class="secondary-button slim" id="reloadClientProfiles" type="button">Refresh my voices</button>
+          </div>
+
+          <div class="voice-source-tabs" role="tablist" aria-label="Voice source options">
+            <button class="voice-source-tab active" type="button" data-source-mode="upload">Upload audio</button>
+            <button class="voice-source-tab" type="button" data-source-mode="record">Record my voice</button>
+            <button class="voice-source-tab" type="button" data-source-mode="saved">My saved voices</button>
+            <button class="voice-source-tab" type="button" data-source-mode="preview">System preview voices</button>
+          </div>
+
+          <div class="voice-source-panel" data-source-panel="upload">
+            <label class="upload-drop-lite">
+              <span>Upload a voice sample</span>
+              <input id="voiceAudio" name="audio" type="file" accept="audio/*" />
+              <small>Choose a clean WAV, MP3, M4A, OGG or WEBM file.</small>
+            </label>
+            <p id="uploadFileName" class="muted-line">No audio selected yet.</p>
+            <button class="primary-button" id="createUploadProfile" type="button">Create voice identity from upload</button>
+          </div>
+
+          <div class="voice-source-panel" data-source-panel="record" hidden>
+            <div class="recorder-card">
+              <strong id="recordingStatus">Recorder ready</strong>
+              <span id="recordingHelp">Record a clean voice sample, then save it as a reusable private voice identity.</span>
+              <div class="recorder-actions">
+                <button class="secondary-button" id="startRecording" type="button">Start recording</button>
+                <button class="secondary-button" id="stopRecording" type="button" disabled>Stop</button>
+                <button class="secondary-button" id="discardRecording" type="button" disabled>Discard</button>
+              </div>
+              <audio id="recordedPreview" controls hidden></audio>
+              <button class="primary-button" id="createRecordedProfile" type="button" disabled>Create voice identity from recording</button>
+            </div>
+          </div>
+
+          <div class="voice-source-panel" data-source-panel="saved" hidden>
+            <div class="preview-voice-toolbar">
+              <p class="muted-line">Voices created from your uploaded or recorded audio are private to this browser workspace.</p>
+              <button class="secondary-button" id="refreshSavedVoices" type="button">Refresh</button>
+            </div>
+            <div id="clientVoiceList" class="compact-voice-list">Loading your saved voices…</div>
+          </div>
+
+          <div class="voice-source-panel" data-source-panel="preview" hidden>
+            <div class="preview-voice-toolbar">
+              <p class="muted-line">System preview voices are approved shared presets.</p>
+              <div class="toolbar-actions">
+                <button class="secondary-button" id="refreshPreviewVoices" type="button">Refresh</button>
+                <button class="secondary-button" id="closePreviewVoices" type="button">Close list</button>
+              </div>
+            </div>
+            <div id="previewVoiceList" class="compact-voice-list">Loading preview voices…</div>
+          </div>
+
+          <div id="selectedVoiceBox" class="selected-voice-box" hidden>
+            <span>Selected voice</span>
+            <strong id="selectedVoiceName">None</strong>
+          </div>
+        </section>
+
+        <label>
+          <span>Narration text</span>
+          <textarea id="voicePrompt" name="prompt" rows="9" required placeholder="Paste the narration script here..."></textarea>
+        </label>
+
+        <div class="form-actions">
+          <button class="secondary-button" type="reset">Reset</button>
+          <button class="primary-button" id="voiceSubmit" type="submit">Generate narration</button>
+        </div>
+      </form>
+
+      <aside class="feature-card result-card-lite" aria-live="polite">
+        <div class="section-heading compact">
+          <p class="eyebrow">Output</p>
+          <h2 id="voiceResultTitle">No narration yet</h2>
+          <p id="voiceResultStatus">Create or choose a voice identity, then submit your narration script.</p>
+        </div>
+        <div id="voiceResultPreview" class="voice-result-preview"></div>
+        <dl id="voiceResultMeta" class="result-meta"></dl>
+      </aside>
+    </section>
+  </main>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+  <script src="/voice_clone_client.js?v=voice-v3" defer></script>
+<script src="/voice_preview_toggle_fix.js?v=20260705123613" defer></script>
+<script src="/voice_upload_submit_fix.js?v=20260705135933" defer></script>
+<script src="/clone_voice_debug_client.js?v=20260705143741" defer></script>
+</body>
+</html>
