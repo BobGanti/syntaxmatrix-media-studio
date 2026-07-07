@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Clone Voice Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/clone_voice/admin.css?v=gender-required-1">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <p class="eyebrow">SyntaxMatrix Media Studio</p>
+      <h1>Clone Voice Admin</h1>
+      <p>Configure Clone Voice limits and manage system voices.</p>
+      <p><a href="/tasks/clone-voice">← Back to Clone Voice</a></p>
+    </header>
+
+    <section class="card">
+      <h2>Voice source duration</h2>
+      <p class="status">
+        D controls the maximum seconds allowed for uploaded or recorded voice source audio.
+        The client recorder auto-stops at this value, and the backend trims source audio to this value before creating the voice parameter.
+      </p>
+
+      <form id="durationForm" class="form-grid">
+        <label>
+          Max voice source duration, D seconds
+          <input id="durationInput" name="maxVoiceSourceSeconds" type="number" min="5" max="120" step="1" required>
+        </label>
+
+        <button id="saveDurationBtn" type="submit">Save duration</button>
+      </form>
+
+      <div id="durationStatusBox" class="status-box">Loading setting...</div>
+    </section>
+
+    <section class="card">
+      <h2>System voices</h2>
+      <p class="status">
+        Upload a system voice source, set its display name and gender, then the system creates a stable voice parameter and a standard synthesized preview.
+      </p>
+
+      <form id="systemVoiceForm" class="system-form">
+        <label>
+          System voice source audio
+          <input id="systemVoiceAudio" type="file" accept="audio/*" required>
+        </label>
+
+        <label>
+          Display name
+          <input id="systemVoiceDisplayName" type="text" placeholder="Example: Bobga, Ngozi" required>
+        </label>
+
+        <label>
+          Gender
+          <select id="systemVoiceGender" required>
+            <option value="">Choose gender</option>
+            <option value="M">Male (M)</option>
+            <option value="F">Female (F)</option>
+          </select>
+        </label>
+
+        <label class="check-row">
+          <input id="replaceSystemVoice" type="checkbox">
+          Replace existing voice with same display name
+        </label>
+
+        <button id="saveSystemVoiceBtn" type="submit">Create system voice</button>
+      </form>
+
+      <div id="systemVoiceStatusBox" class="status-box">No system voice request sent yet.</div>
+
+      <div class="list-toolbar">
+        <label>
+          Filter
+          <select id="systemVoiceFilter">
+            <option value="">All voices</option>
+            <option value="M">Male voices</option>
+            <option value="F">Female voices</option>
+            
+          </select>
+        </label>
+
+        <button id="refreshSystemVoicesBtn" type="button">Refresh system voices</button>
+      </div>
+
+      <audio id="systemPreviewPlayer" controls class="hidden"></audio>
+
+      <div id="systemVoicesList" class="voice-list">Loading system voices...</div>
+    </section>
+  </main>
+
+  <script src="/clone_voice/admin.js?v=gender-required-1"></script>
+</body>
+</html>

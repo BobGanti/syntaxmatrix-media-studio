@@ -140,7 +140,7 @@ if __name__ == '__main__':
         save_voice_to_disk(cloned_voice_parameter, CLONED_DATA_FILE_PATH)
 
 
-    fname = "yt181.txt"
+    fname = "txt_sources\yt131.txt"
     ctx = read_text_from_file(fname)
     NARRATION_TEXT = {
         "title": fname.split(".")[0], 

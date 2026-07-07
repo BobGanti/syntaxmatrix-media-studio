@@ -1,0 +1,7 @@
+AI pilots are easy.
+But keeping AI reliable is hard.
+That's the day-2 reality.
+And that's exactly what SyntaxMatrix Platform Provisioner, smxPP, is built for. 
+smxPP provisions a complete AI enabled platform into your environment, not a hosted wrapper around AI APIs.
+It's client-owned by design and Bring Your Own Key (BYOK) supported.
+So you stay in control of your data boundaries and deployments.

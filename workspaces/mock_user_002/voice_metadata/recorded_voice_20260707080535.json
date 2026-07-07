@@ -1,0 +1,14 @@
+{
+  "voiceId": "recorded_voice_20260707080535",
+  "displayName": "Bobga",
+  "gender": "M",
+  "label": "Bobga (M)",
+  "previewText": "Hello, this is a preview of this voice. I can read your narration clearly, naturally, and consistently.",
+  "previewKind": "standard_synthesized",
+  "sourceType": "record",
+  "parameterPath": "workspaces/mock_user_002/voice_params/recorded_voice_20260707080535_parameter.txt",
+  "previewPath": "workspaces/mock_user_002/voice_previews/recorded_voice_20260707080535_preview.wav",
+  "parameterCreated": true,
+  "previewCreated": true,
+  "updatedAt": "2026-07-07T08:05:49"
+}
