@@ -12,6 +12,7 @@ from services.clone_voice_audio_policy import (
     set_max_voice_source_seconds,
 )
 from services.clone_voice_provider import create_voice_parameter, generate_narration_to_file
+from services.clone_voice_style import generate_narration_to_file_with_style
 from services.clone_voice_system import (
     SYSTEM_PREVIEWS_DIR,
     delete_system_voice,
@@ -50,9 +51,15 @@ def _error(message: str, status: int = 500):
     return jsonify({"ok": False, "message": message, "error": message}), status
 
 
-def _generate_and_normalize(voice_parameter: str, prompt: str, workspace, title: str, narration_speed="normal"):
+def _generate_and_normalize(voice_parameter: str, prompt: str, workspace, title: str, narration_speed="normal", narration_style="natural"):
     output_path = generated_audio_path(workspace, title)
-    generate_narration_to_file(voice_parameter, prompt, output_path)
+
+    style_info = generate_narration_to_file_with_style(
+        voice_parameter,
+        prompt,
+        output_path,
+        narration_style,
+    )
 
     speed_info = narration_speed_payload(narration_speed)
     apply_narration_speed_to_file(output_path, speed_info["key"])
@@ -60,7 +67,7 @@ def _generate_and_normalize(voice_parameter: str, prompt: str, workspace, title:
     normalize_generated_audio_file(output_path)
     asset_url = workspace_generated_audio_url(workspace, output_path)
 
-    return output_path, asset_url, speed_info
+    return output_path, asset_url, speed_info, style_info
 
 
 def _generate_standard_preview(voice_parameter: str, preview_path):
@@ -518,143 +525,10 @@ def register_clone_voice_routes(app):
     if "clone_voice_from_source" not in app.view_functions:
         @app.post("/api/clone-voice/from-source", endpoint="clone_voice_from_source")
         def from_source():
-            title = request.form.get("title", "").strip()
-            prompt = request.form.get("prompt", "").strip()
-            workspace_id = request.form.get("workspaceId", MOCK_WORKSPACE_ID)
-            source_mode = request.form.get("sourceMode", "upload").strip().lower()
-            narration_speed = request.form.get("narrationSpeed", "normal").strip()
-            audio_file = request.files.get("audio")
-
-            display_name_input = (
-                request.form.get("voiceDisplayName", "")
-                or request.form.get("displayName", "")
-                or request.form.get("voiceName", "")
-            ).strip()
-
-            gender = normalize_gender(request.form.get("gender"))
-
-            if gender not in {"M", "F"}:
-                return _error("Voice gender is required. Choose Male (M) or Female (F).", 400)
-
-            _print_received_source(prompt, title, audio_file, source_mode)
-
-            if not title:
-                return _error("Missing narration title", 400)
-
-            if not prompt:
-                return _error("Missing prompt", 400)
-
-            if audio_file is None or not audio_file.filename:
-                return _error("Missing uploaded audio file under field name 'audio'", 400)
-
-            is_recording = source_mode == "record"
-            workspace = get_workspace(workspace_id)
-
-            raw_source_path = None
-            limited_source_path = None
-
-            try:
-                if is_recording:
-                    voice_id = new_recorded_voice_id()
-                else:
-                    voice_id = voice_id_from_source_filename(audio_file.filename)
-
-                display_name = display_name_input or display_name_from_voice_id(voice_id)
-                preview_path = stable_preview_path(workspace, voice_id)
-                max_seconds = get_max_voice_source_seconds()
-
-                raw_source_path = save_source_audio(audio_file, workspace)
-
-                print("[clone_voice_controller] voiceId:", voice_id, flush=True)
-                print("[clone_voice_controller] displayName:", display_name, flush=True)
-                print("[clone_voice_controller] gender:", gender, flush=True)
-                print("[clone_voice_controller] raw source:", raw_source_path, flush=True)
-                print("[clone_voice_controller] preview target:", preview_path, flush=True)
-
-                existing_parameter = voice_parameter_exists(workspace, voice_id)
-
-                parameter_created = False
-                preview_created = False
-
-                if existing_parameter and not is_recording:
-                    print("[clone_voice_controller] Uploaded source parameter already exists. Reusing:", voice_id, flush=True)
-                    voice_parameter, param_path = load_workspace_voice_parameter(workspace, voice_id)
-                else:
-                    limited_source_path = source_limited_path(workspace, voice_id)
-
-                    limit_audio_to_max_seconds(
-                        input_path=raw_source_path,
-                        output_path=limited_source_path,
-                        max_seconds=max_seconds,
-                    )
-
-                    print("[clone_voice_controller] Creating voice parameter from limited source:", limited_source_path, flush=True)
-
-                    voice_parameter = create_voice_parameter(limited_source_path, "audio/wav")
-                    voice_id, param_path = save_voice_parameter(workspace, voice_parameter, voice_id)
-                    parameter_created = True
-
-                metadata_before = load_voice_metadata(workspace, voice_id)
-                preview_is_standard = (
-                    preview_path.exists()
-                    and metadata_before.get("previewKind") == "standard_synthesized"
-                )
-
-                if is_recording or not preview_is_standard:
-                    _generate_standard_preview(voice_parameter, preview_path)
-                    preview_created = True
-                else:
-                    print("[clone_voice_controller] Standard preview already exists. Reusing:", preview_path, flush=True)
-
-                metadata, metadata_path = save_voice_metadata(
-                    workspace,
-                    voice_id,
-                    display_name,
-                    gender,
-                    source_type="record" if is_recording else "upload",
-                    parameter_path=param_path,
-                    preview_path=preview_path,
-                    parameter_created=parameter_created,
-                    preview_created=preview_created,
-                )
-
-                output_path, asset_url, speed_info = _generate_and_normalize(voice_parameter, prompt, workspace, title, narration_speed)
-
-                return jsonify({
-                    "ok": True,
-                    "sourceType": "record" if is_recording else "upload",
-                    "workspaceId": workspace.workspace_id,
-                    "voiceId": voice_id,
-                    "displayName": metadata["displayName"],
-                    "gender": metadata["gender"],
-                    "label": metadata["label"],
-                    "voiceParamPath": relative_to_root(param_path),
-                    "voicePreviewPath": relative_to_root(preview_path),
-                    "voicePreviewUrl": workspace_voice_preview_url(workspace, preview_path),
-                    "voiceMetadataPath": relative_to_root(metadata_path),
-                    "previewText": STANDARD_VOICE_PREVIEW_TEXT,
-                    "parameterCreated": parameter_created,
-                    "previewCreated": preview_created,
-                    "maxVoiceSourceSeconds": max_seconds,
-                    "rawSourceDeleted": True,
-                    "assetUrl": asset_url,
-                    "audioUrl": asset_url,
-                    "outputPath": relative_to_root(output_path),
-                    "narrationTitle": title,
-                    "volumeNormalized": True,
-                    "narrationSpeed": speed_info["key"],
-                    "narrationSpeedLabel": speed_info["label"],
-                    "narrationSpeedMultiplier": speed_info["multiplier"],
-                    "narrationSpeedDisplay": speed_info["display"],
-                })
-
-            except Exception as exc:
-                print("[clone_voice_controller] from-source error:", repr(exc), flush=True)
-                return _error(str(exc), 500)
-
-            finally:
-                delete_if_exists(raw_source_path)
-                delete_if_exists(limited_source_path)
+            return _error(
+                "Deprecated route. Use POST /api/clone-voice/voices/from-source to save a voice, then POST /api/clone-voice/from-saved or /api/clone-voice/from-system to generate narration.",
+                410,
+            )
 
     if "clone_voice_from_saved" not in app.view_functions:
         @app.post("/api/clone-voice/from-saved", endpoint="clone_voice_from_saved")
@@ -664,6 +538,7 @@ def register_clone_voice_routes(app):
             voice_id = request.form.get("voiceId", "").strip()
             workspace_id = request.form.get("workspaceId", MOCK_WORKSPACE_ID)
             narration_speed = request.form.get("narrationSpeed", "normal").strip()
+            narration_style = request.form.get("narrationStyle", "natural").strip()
 
             if not title:
                 return _error("Missing narration title", 400)
@@ -679,7 +554,7 @@ def register_clone_voice_routes(app):
                 voice_parameter, param_path = load_workspace_voice_parameter(workspace, voice_id)
                 metadata = load_voice_metadata(workspace, voice_id)
 
-                output_path, asset_url, speed_info = _generate_and_normalize(voice_parameter, prompt, workspace, title, narration_speed)
+                output_path, asset_url, speed_info, style_info = _generate_and_normalize(voice_parameter, prompt, workspace, title, narration_speed, narration_style)
 
                 return jsonify({
                     "ok": True,
@@ -699,6 +574,11 @@ def register_clone_voice_routes(app):
                     "narrationSpeedLabel": speed_info["label"],
                     "narrationSpeedMultiplier": speed_info["multiplier"],
                     "narrationSpeedDisplay": speed_info["display"],
+                    "narrationStyle": style_info["key"],
+                    "narrationStyleLabel": style_info["label"],
+                    "narrationStyleDisplay": style_info["display"],
+                    "narrationStyleApplied": style_info["styleApplied"],
+                    "narrationStyleReason": style_info["styleReason"],
                 })
 
             except Exception as exc:
@@ -713,6 +593,7 @@ def register_clone_voice_routes(app):
             voice_id = request.form.get("voiceId", "").strip()
             workspace_id = request.form.get("workspaceId", MOCK_WORKSPACE_ID)
             narration_speed = request.form.get("narrationSpeed", "normal").strip()
+            narration_style = request.form.get("narrationStyle", "natural").strip()
 
             if not title:
                 return _error("Missing narration title", 400)
@@ -727,7 +608,7 @@ def register_clone_voice_routes(app):
                 workspace = get_workspace(workspace_id)
                 voice_parameter, param_path = load_system_voice_parameter(voice_id)
 
-                output_path, asset_url, speed_info = _generate_and_normalize(voice_parameter, prompt, workspace, title, narration_speed)
+                output_path, asset_url, speed_info, style_info = _generate_and_normalize(voice_parameter, prompt, workspace, title, narration_speed, narration_style)
 
                 return jsonify({
                     "ok": True,
@@ -744,6 +625,11 @@ def register_clone_voice_routes(app):
                     "narrationSpeedLabel": speed_info["label"],
                     "narrationSpeedMultiplier": speed_info["multiplier"],
                     "narrationSpeedDisplay": speed_info["display"],
+                    "narrationStyle": style_info["key"],
+                    "narrationStyleLabel": style_info["label"],
+                    "narrationStyleDisplay": style_info["display"],
+                    "narrationStyleApplied": style_info["styleApplied"],
+                    "narrationStyleReason": style_info["styleReason"],
                 })
 
             except Exception as exc:

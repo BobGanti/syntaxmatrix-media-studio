@@ -44,6 +44,7 @@
 
   const titleInput = $("#titleInput");
   const narrationSpeed = $("#narrationSpeed");
+  const narrationStyle = $("#narrationStyle");
   const promptInput = $("#promptInput");
   const submitBtn = $("#submitBtn");
 
@@ -186,18 +187,16 @@
   }
 
   function renderFriendlyResult(data) {
+    const styleDisplay = data.narrationStyleDisplay || data.narrationStyleLabel || "";
     const rows = [
-      ["Narration", filenameFromPath(data.outputPath || data.assetUrl || data.audioUrl) || ""],
-      ["Workspace", data.workspaceId || activeWorkspaceId],
       ["Title", data.narrationTitle || ""],
       ["Voice", data.label || data.displayName || data.voiceId || ""],
-      ["Source", data.sourceType || ""],
       ["Speed", data.narrationSpeedDisplay || (data.narrationSpeedMultiplier ? `${data.narrationSpeedMultiplier}x` : "")],
-      ["Volume normalized", data.volumeNormalized ? "Yes" : ""],
+      ["Style", styleDisplay],
     ].filter((row) => row[1] !== "");
 
     resultBox.innerHTML = `
-      <strong>Narration generated successfully.</strong>
+      <strong>Narration ready.</strong>
       <div class="result-grid">
         ${rows.map(([label, value]) => `
           <div class="result-row">
@@ -206,22 +205,17 @@
           </div>
         `).join("")}
       </div>
-      <div class="muted">Narration is generated only from a saved voice or a system voice.</div>
     `;
   }
 
   function renderVoiceSavedResult(data) {
     const rows = [
-      ["Workspace", data.workspaceId || activeWorkspaceId],
       ["Voice", data.label || data.displayName || data.voiceId || ""],
-      ["Source", data.sourceType || ""],
-      ["Max voice sample", data.maxVoiceSourceSeconds ? `${data.maxVoiceSourceSeconds} seconds` : ""],
-      ["Parameter", data.parameterCreated ? "Created" : "Reused existing"],
-      ["Preview", data.previewCreated ? "Created" : "Reused existing"],
+      ["Gender", data.gender || ""],
     ].filter((row) => row[1] !== "");
 
     resultBox.innerHTML = `
-      <strong>Voice saved successfully.</strong>
+      <strong>Voice saved.</strong>
       <div class="result-grid">
         ${rows.map(([label, value]) => `
           <div class="result-row">
@@ -230,7 +224,7 @@
           </div>
         `).join("")}
       </div>
-      <div class="muted">Select this voice from My saved voices to generate narration.</div>
+      <div class="muted">Preview is ready. Select this voice under My saved voices to generate narration.</div>
     `;
   }
 
@@ -871,7 +865,9 @@
   }
 
   async function submitForm(event) {
-    event.preventDefault();
+    if (event && typeof event.preventDefault === "function") {
+      event.preventDefault();
+    }
 
     const mode = selectedMode();
 
@@ -899,6 +895,7 @@
     formData.append("prompt", prompt);
     formData.append("sourceMode", mode);
     formData.append("narrationSpeed", narrationSpeed ? narrationSpeed.value : "normal");
+    formData.append("narrationStyle", narrationStyle ? narrationStyle.value : "natural");
 
     let endpoint = "";
 
@@ -1022,6 +1019,13 @@
       playPreview(previewButton.getAttribute("data-preview-url"));
     }
   });
+
+  function handleGenerateButtonClick(event) {
+    event.preventDefault();
+    submitForm(event);
+  }
+
+  submitBtn.addEventListener("click", handleGenerateButtonClick);
 
   form.addEventListener("submit", submitForm);
 

@@ -4,37 +4,53 @@
   <meta charset="utf-8">
   <title>Clone Voice</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="/clone_voice/client.css?v=saved-voice-edit-replace-1">
+  <link rel="stylesheet" href="/clone_voice/client.css?v=product-ui-panels-1">
 </head>
 <body>
   <main class="shell">
     <header class="hero">
-      <p class="eyebrow">SyntaxMatrix Media Studio</p>
-      <h1>Clone Voice</h1>
-      <p>Create reusable workspace voices, preview them, then generate narration from a saved or system voice.</p>
+      <div>
+        <p class="eyebrow">SyntaxMatrix Media Studio</p>
+        <h1>Clone Voice</h1>
+        <p>Create reusable voices, preview them, and generate narration from saved or system voices.</p>
+      </div>
     </header>
 
-    <form id="cloneVoiceForm" class="card">
-      <section class="workspace-section">
-        <h2>0. Client workspace</h2>
+    <form id="cloneVoiceForm" class="product-flow">
+      <section class="product-panel panel-workspace">
+        <div class="panel-heading">
+          <span class="panel-number">1</span>
+          <div>
+            <h2>Workspace</h2>
+            <p>Select the client workspace for saved voices and narrations.</p>
+          </div>
+        </div>
 
-        <label>
-          Active workspace
-          <select id="workspaceSelect">
-            <option value="mock_user_001">Client A / Workspace 001</option>
-            <option value="mock_user_002">Client B / Workspace 002</option>
-          </select>
-        </label>
+        <div class="compact-row one">
+          <label>
+            Active workspace
+            <select id="workspaceSelect">
+              <option value="mock_user_001">Client A / Workspace 001</option>
+              <option value="mock_user_002">Client B / Workspace 002</option>
+            </select>
+          </label>
+        </div>
+
+        <p id="workspaceStatus" class="hidden"></p>
       </section>
 
-      <section class="voice-flow-panel">
-        <h2>1. Create or choose voice</h2>
+      <section class="product-panel panel-create">
+        <div class="panel-heading">
+          <span class="panel-number">2</span>
+          <div>
+            <h2>Create Voice</h2>
+            <p>Upload or record a source, then save it as a reusable voice.</p>
+          </div>
+        </div>
 
-        <div class="mode-grid">
+        <div class="mode-grid create-mode-grid">
           <label><input type="radio" name="sourceMode" value="upload" checked> Upload audio</label>
           <label><input type="radio" name="sourceMode" value="record"> Record voice</label>
-          <label><input type="radio" name="sourceMode" value="saved"> My saved voices</label>
-          <label><input type="radio" name="sourceMode" value="system"> System voices</label>
         </div>
 
         <div id="uploadPanel" class="source-panel">
@@ -42,7 +58,6 @@
             Upload voice source
             <input id="audioFile" type="file" accept="audio/*">
           </label>
-          <p class="status">Uploaded files are used only to create or reuse a saved voice. Narration is generated later from My saved voices.</p>
         </div>
 
         <div id="recordPanel" class="source-panel hidden">
@@ -62,8 +77,6 @@
             </div>
             <span class="mic-meter-value" id="micMeterValue">silent</span>
           </div>
-
-          <p class="status">Each recording creates a new saved voice. Narration is generated later from My saved voices.</p>
         </div>
 
         <div id="voiceCreatePanel" class="voice-create-grid">
@@ -83,6 +96,21 @@
 
           <button id="saveVoiceBtn" type="button">Save voice</button>
         </div>
+      </section>
+
+      <section class="product-panel panel-choose">
+        <div class="panel-heading">
+          <span class="panel-number">3</span>
+          <div>
+            <h2>Choose Voice</h2>
+            <p>Select a saved workspace voice or a system voice for narration.</p>
+          </div>
+        </div>
+
+        <div class="mode-grid choose-mode-grid">
+          <label><input type="radio" name="sourceMode" value="saved"> My saved voices</label>
+          <label><input type="radio" name="sourceMode" value="system"> System voices</label>
+        </div>
 
         <div id="savedPanel" class="source-panel hidden">
           <div class="list-toolbar">
@@ -92,12 +120,13 @@
                 <option value="">All voices</option>
                 <option value="M">Male voices</option>
                 <option value="F">Female voices</option>
-                
               </select>
             </label>
-            <button id="refreshSavedBtn" type="button">Refresh saved voices</button>
+            <button id="refreshSavedBtn" type="button">Refresh</button>
           </div>
+
           <div id="savedVoicesList" class="voice-list">Loading saved voices...</div>
+
           <div id="savedVoiceManagePanel" class="voice-manage-panel hidden">
             <h3>Manage selected voice</h3>
 
@@ -126,10 +155,7 @@
 
               <button id="replaceSavedVoiceSourceBtn" type="button">Replace source</button>
             </div>
-
-            <p class="status">Editing details keeps the current parameter and preview. Replacing source rebuilds both.</p>
           </div>
-
         </div>
 
         <div id="systemPanel" class="source-panel hidden">
@@ -140,22 +166,28 @@
                 <option value="">All voices</option>
                 <option value="M">Male voices</option>
                 <option value="F">Female voices</option>
-                
               </select>
             </label>
-            <button id="refreshSystemBtn" type="button">Refresh system voices</button>
+            <button id="refreshSystemBtn" type="button">Refresh</button>
           </div>
+
           <div id="systemVoicesList" class="voice-list">Loading system voices...</div>
         </div>
       </section>
 
-      <section class="narration-flow-panel">
-        <h2>2. Narration</h2>
+      <section class="product-panel panel-narration">
+        <div class="panel-heading">
+          <span class="panel-number">4</span>
+          <div>
+            <h2>Generate Narration</h2>
+            <p>Use the selected voice to generate the final narration audio.</p>
+          </div>
+        </div>
 
         <div class="narration-top-grid">
           <label>
             Narration title
-            <input id="titleInput" type="text" placeholder="Example: NewAge" required>
+            <input id="titleInput" type="text" placeholder="Example: ProductIntro" required>
           </label>
 
           <label>
@@ -168,6 +200,17 @@
               <option value="faster">Faster (1.20x)</option>
             </select>
           </label>
+
+          <label>
+            Delivery style
+            <select id="narrationStyle">
+              <option value="natural" selected>Natural</option>
+              <option value="clear_presenter">Clear / Presenter</option>
+              <option value="dramatic">Dramatic</option>
+              <option value="calm">Calm</option>
+              <option value="energetic">Energetic</option>
+            </select>
+          </label>
         </div>
 
         <label>
@@ -175,20 +218,25 @@
           <textarea id="promptInput" rows="8" placeholder="Paste the narration text here..." required></textarea>
         </label>
 
-        <p class="status">Narration can only be generated from My saved voices or System voices.</p>
-
-        <button id="submitBtn" type="submit">Generate narration</button>
+        <button id="submitBtn" class="primary-cta" type="submit">Generate narration</button>
       </section>
     </form>
 
-    <section class="card">
-      <h2>Result</h2>
+    <section class="product-panel panel-result">
+      <div class="panel-heading">
+        <span class="panel-number">✓</span>
+        <div>
+          <h2>Result</h2>
+          <p>Your voice preview or generated narration appears here.</p>
+        </div>
+      </div>
+
       <audio id="audioPlayer" controls class="hidden"></audio>
-      <p><a id="downloadLink" class="hidden" href="#" download>Download narration</a></p>
+      <p><a id="downloadLink" class="download-link hidden" href="#" download>Download narration</a></p>
       <div id="resultBox" class="result-summary">No request sent yet.</div>
     </section>
   </main>
 
-  <script src="/clone_voice/client.js?v=saved-voice-edit-replace-1"></script>
+  <script src="/clone_voice/client.js?v=deprecated-route-disabled-1"></script>
 </body>
 </html>
