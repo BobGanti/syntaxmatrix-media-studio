@@ -69,6 +69,147 @@ app = Flask(__name__, static_folder=None)
 
 
 # ---------------------------------------------------------------------
+# WSGI-LEVEL API GUARD: storage status/media audit
+# This runs before Flask route fallback handlers.
+# ---------------------------------------------------------------------
+if "syntaxmatrix_storage_api_wsgi_guard_installed" not in globals():
+    syntaxmatrix_storage_api_wsgi_guard_installed = True
+    _syntaxmatrix_original_wsgi_app = app.wsgi_app
+
+    def _syntaxmatrix_storage_api_wsgi_guard(environ, start_response):
+        path = str(environ.get("PATH_INFO") or "").rstrip("/")
+
+        if path not in {
+            "/api/admin/storage/status",
+            "/api/admin/storage/media-audit",
+        }:
+            return _syntaxmatrix_original_wsgi_app(environ, start_response)
+
+        with app.request_context(environ):
+            from flask import jsonify, request
+
+            if request.method.upper() != "GET":
+                response = jsonify({
+                    "ok": False,
+                    "error": "Method not allowed.",
+                    "endpoint": path,
+                })
+                response.status_code = 405
+                return response(environ, start_response)
+
+            try:
+                from services.auth_context import (
+                    AuthError,
+                    auth_context_from_request,
+                    auth_error_payload,
+                    require_admin,
+                )
+
+                ctx = auth_context_from_request(request)
+                require_admin(ctx)
+
+            except AuthError as exc:
+                response = jsonify(auth_error_payload(exc))
+                response.status_code = exc.status_code
+                return response(environ, start_response)
+
+            except Exception as exc:
+                response = jsonify({
+                    "ok": False,
+                    "error": str(exc),
+                    "stage": "auth",
+                    "endpoint": path,
+                })
+                response.status_code = 500
+                return response(environ, start_response)
+
+            try:
+                if path == "/api/admin/storage/status":
+                    from services.object_storage import object_storage_status_payload
+
+                    response = jsonify({
+                        "ok": True,
+                        **object_storage_status_payload(),
+                    })
+                    return response(environ, start_response)
+
+                from services.object_storage_media_audit import object_storage_media_audit_payload
+
+                response = jsonify({
+                    "ok": True,
+                    **object_storage_media_audit_payload(),
+                })
+                return response(environ, start_response)
+
+            except Exception as exc:
+                response = jsonify({
+                    "ok": False,
+                    "error": str(exc),
+                    "stage": "payload",
+                    "endpoint": path,
+                })
+                response.status_code = 500
+                return response(environ, start_response)
+
+    app.wsgi_app = _syntaxmatrix_storage_api_wsgi_guard
+
+
+
+# ---------------------------------------------------------------------
+# EARLY API GUARD: storage status/media audit
+# Must be registered near app creation, before broad Media Studio fallback.
+# ---------------------------------------------------------------------
+@app.before_request
+def syntaxmatrix_early_storage_api_guard():
+    from flask import jsonify, request
+
+    path = request.path.rstrip("/")
+
+    if path not in {
+        "/api/admin/storage/status",
+        "/api/admin/storage/media-audit",
+    }:
+        return None
+
+    if request.method.upper() != "GET":
+        return jsonify({
+            "ok": False,
+            "error": "Method not allowed.",
+            "endpoint": path,
+        }), 405
+
+    from services.auth_context import (
+        AuthError,
+        auth_context_from_request,
+        auth_error_payload,
+        require_admin,
+    )
+
+    ctx = auth_context_from_request(request)
+
+    try:
+        require_admin(ctx)
+    except AuthError as exc:
+        return jsonify(auth_error_payload(exc)), exc.status_code
+
+    if path == "/api/admin/storage/status":
+        from services.object_storage import object_storage_status_payload
+
+        return jsonify({
+            "ok": True,
+            **object_storage_status_payload(),
+        })
+
+    from services.object_storage_media_audit import object_storage_media_audit_payload
+
+    return jsonify({
+        "ok": True,
+        **object_storage_media_audit_payload(),
+    })
+
+
+
+# ---------------------------------------------------------------------
 # Clone Voice Finance Console hard route guard
 # Runs before normal Flask routing so /admin/clone-voice/billing cannot
 # fall through to the general Media Studio page.
@@ -1473,6 +1614,112 @@ def syntaxmatrix_object_storage_status_guard():
         "ok": True,
         **object_storage_status_payload(),
     })
+
+
+
+
+# ---------------------------------------------------------------------
+# Hard guard for object storage media audit
+# ---------------------------------------------------------------------
+@app.before_request
+def syntaxmatrix_object_storage_media_audit_guard():
+    from flask import jsonify, request
+
+    if request.path.rstrip("/") != "/api/admin/storage/media-audit":
+        return None
+
+    if request.method.upper() != "GET":
+        return jsonify({
+            "ok": False,
+            "error": "Method not allowed.",
+            "endpoint": "/api/admin/storage/media-audit",
+        }), 405
+
+    from services.auth_context import (
+        AuthError,
+        auth_context_from_request,
+        auth_error_payload,
+        require_admin,
+    )
+    from services.object_storage_media_audit import object_storage_media_audit_payload
+
+    ctx = auth_context_from_request(request)
+
+    try:
+        require_admin(ctx)
+    except AuthError as exc:
+        return jsonify(auth_error_payload(exc)), exc.status_code
+
+    return jsonify({
+        "ok": True,
+        **object_storage_media_audit_payload(),
+    })
+
+
+
+
+# ---------------------------------------------------------------------
+# WSGI-LEVEL API GUARD: storage media backfill
+# ---------------------------------------------------------------------
+if "syntaxmatrix_storage_backfill_wsgi_guard_installed" not in globals():
+    syntaxmatrix_storage_backfill_wsgi_guard_installed = True
+    _syntaxmatrix_storage_backfill_previous_wsgi_app = app.wsgi_app
+
+    def _syntaxmatrix_storage_backfill_wsgi_guard(environ, start_response):
+        path = str(environ.get("PATH_INFO") or "").rstrip("/")
+
+        if path != "/api/admin/storage/backfill":
+            return _syntaxmatrix_storage_backfill_previous_wsgi_app(environ, start_response)
+
+        with app.request_context(environ):
+            from flask import jsonify, request
+
+            if request.method.upper() != "POST":
+                response = jsonify({
+                    "ok": False,
+                    "error": "Method not allowed.",
+                    "endpoint": path,
+                })
+                response.status_code = 405
+                return response(environ, start_response)
+
+            try:
+                from services.auth_context import (
+                    AuthError,
+                    auth_context_from_request,
+                    auth_error_payload,
+                    require_admin,
+                )
+
+                ctx = auth_context_from_request(request)
+                require_admin(ctx)
+
+            except AuthError as exc:
+                response = jsonify(auth_error_payload(exc))
+                response.status_code = exc.status_code
+                return response(environ, start_response)
+
+            try:
+                from scripts.backfill_workspace_media_to_object_storage import backfill_workspace_media
+
+                data = request.get_json(silent=True) or {}
+                dry_run = not bool(data.get("apply"))
+                payload = backfill_workspace_media(dry_run=dry_run)
+
+                response = jsonify(payload)
+                response.status_code = 200 if payload.get("ok") else 500
+                return response(environ, start_response)
+
+            except Exception as exc:
+                response = jsonify({
+                    "ok": False,
+                    "error": str(exc),
+                    "endpoint": path,
+                })
+                response.status_code = 500
+                return response(environ, start_response)
+
+    app.wsgi_app = _syntaxmatrix_storage_backfill_wsgi_guard
 
 
 if __name__ == "__main__":
