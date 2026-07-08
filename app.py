@@ -1031,6 +1031,106 @@ if "billing_entitlement_status" not in app.view_functions:
         })
 
 
+
+
+# ---------------------------------------------------------------------
+# Client-safe Stripe billing portal
+# ---------------------------------------------------------------------
+if "billing_stripe_customer_portal" not in app.view_functions:
+    @app.post("/api/billing/portal/stripe", endpoint="billing_stripe_customer_portal")
+    def billing_stripe_customer_portal():
+        from flask import jsonify, request
+
+        from services.auth_context import (
+            AuthError,
+            auth_context_from_request,
+            auth_error_payload,
+            require_workspace_access,
+        )
+        from services.stripe_customer_portal import (
+            StripeCustomerPortalError,
+            StripeCustomerPortalMissingCustomer,
+            StripeCustomerPortalNotConfigured,
+            create_stripe_customer_portal_session,
+        )
+
+        ctx = auth_context_from_request(request)
+        data = request.get_json(silent=True) or request.form
+        workspace_id = data.get("workspaceId") or ctx.workspace_id
+
+        try:
+            require_workspace_access(ctx, workspace_id)
+            payload = create_stripe_customer_portal_session(workspace_id=workspace_id)
+
+            return jsonify({
+                "ok": True,
+                **payload,
+            })
+
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+
+        except StripeCustomerPortalMissingCustomer as exc:
+            return jsonify({
+                "ok": False,
+                "provider": "stripe",
+                "code": "missing_stripe_customer",
+                "error": str(exc),
+                "message": str(exc),
+            }), 409
+
+        except StripeCustomerPortalNotConfigured as exc:
+            return jsonify({
+                "ok": False,
+                "provider": "stripe",
+                "configured": False,
+                "error": str(exc),
+                "message": str(exc),
+            }), 501
+
+        except StripeCustomerPortalError as exc:
+            return jsonify({
+                "ok": False,
+                "provider": "stripe",
+                "error": str(exc),
+                "message": str(exc),
+            }), 400
+
+        except Exception as exc:
+            return jsonify({
+                "ok": False,
+                "provider": "stripe",
+                "error": str(exc),
+                "message": str(exc),
+            }), 500
+
+
+if "billing_stripe_customer_portal_status" not in app.view_functions:
+    @app.get("/api/billing/portal/stripe/status", endpoint="billing_stripe_customer_portal_status")
+    def billing_stripe_customer_portal_status():
+        from flask import jsonify, request
+
+        from services.auth_context import (
+            AuthError,
+            auth_context_from_request,
+            auth_error_payload,
+            require_workspace_access,
+        )
+        from services.stripe_customer_portal import stripe_customer_portal_status_payload
+
+        ctx = auth_context_from_request(request)
+        workspace_id = request.args.get("workspaceId") or ctx.workspace_id
+
+        try:
+            require_workspace_access(ctx, workspace_id)
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+
+        return jsonify({
+            "ok": True,
+            **stripe_customer_portal_status_payload(workspace_id),
+        })
+
 if __name__ == "__main__":
     print("SyntaxMatrix Media Studio Flask")
     print(f"Open: http://{HOST}:{PORT}")

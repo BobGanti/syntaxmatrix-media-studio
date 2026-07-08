@@ -175,6 +175,25 @@ def _subscription_from_file(workspace_id: str) -> dict[str, Any]:
 def get_subscription_for_entitlement(workspace_id: str) -> dict[str, Any]:
     workspace_id = _clean(workspace_id, "mock_user_001")
 
+    # Stripe webhook state is the highest-trust billing source after checkout.
+    # It contains the real Stripe customer/subscription IDs needed by the
+    # client billing portal.
+    file_record = _subscription_from_file(workspace_id)
+
+    if isinstance(file_record, dict):
+        has_stripe_identity = bool(
+            _clean(file_record.get("stripeCustomerId"))
+            or _clean(file_record.get("stripeSubscriptionId"))
+            or _clean(file_record.get("subscriptionId")).startswith("sub_")
+            or _clean(file_record.get("customerId")).startswith("cus_")
+        )
+
+        if _clean(file_record.get("provider")).lower() == "stripe" or has_stripe_identity:
+            merged = _default_subscription(workspace_id)
+            merged.update(file_record)
+            return merged
+
+    # Fallback for local/manual/dev subscriptions.
     try:
         from services.billing_usage import get_workspace_subscription
 
@@ -192,7 +211,7 @@ def get_subscription_for_entitlement(workspace_id: str) -> dict[str, Any]:
         pass
 
     merged = _default_subscription(workspace_id)
-    merged.update(_subscription_from_file(workspace_id))
+    merged.update(file_record)
     return merged
 
 

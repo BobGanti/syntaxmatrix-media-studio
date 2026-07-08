@@ -209,3 +209,40 @@
 #smxClientUsageCard .smx-usage-grid {
   max-width: 100%;
 }
+
+
+/* Step 31B: client billing actions */
+.smx-billing-manage,
+.smx-billing-upgrade {
+  appearance: none;
+  border-radius: 999px;
+  padding: 8px 13px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.smx-billing-manage {
+  border: 1px solid rgba(147, 197, 253, 0.42);
+  background: rgba(37, 99, 235, 0.18);
+  color: #dbeafe;
+}
+
+.smx-billing-upgrade {
+  border: 1px solid rgba(244, 114, 182, 0.44);
+  background: linear-gradient(135deg, rgba(236, 72, 153, 0.28), rgba(99, 102, 241, 0.24));
+  color: #fce7f3;
+}
+
+.smx-billing-manage:hover {
+  background: rgba(37, 99, 235, 0.28);
+}
+
+.smx-billing-upgrade:hover {
+  background: linear-gradient(135deg, rgba(236, 72, 153, 0.38), rgba(99, 102, 241, 0.34));
+}
+
+.smx-billing-manage:disabled,
+.smx-billing-upgrade:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}

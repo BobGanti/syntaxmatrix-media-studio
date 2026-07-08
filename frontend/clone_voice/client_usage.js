@@ -72,17 +72,6 @@
     return best;
   }
 
-  function isWrongLargeContainer(element) {
-    const text = elementText(element).toLowerCase();
-
-    return (
-      text.includes("create voice") ||
-      text.includes("choose voice") ||
-      text.includes("generate narration") ||
-      text.includes("result")
-    );
-  }
-
   function looksLikePanel(element) {
     if (!element || element === document.body || element === document.documentElement) return false;
 
@@ -104,6 +93,17 @@
     return element.offsetWidth >= 260 && (hasBorder || hasPanelClass || ["SECTION", "ARTICLE", "FIELDSET"].includes(element.tagName));
   }
 
+  function isWrongLargeContainer(element) {
+    const text = elementText(element).toLowerCase();
+
+    return (
+      text.includes("create voice") ||
+      text.includes("choose voice") ||
+      text.includes("generate narration") ||
+      text.includes("result")
+    );
+  }
+
   function findWorkspacePanel() {
     const select = findWorkspaceSelect();
 
@@ -115,11 +115,7 @@
     while (current && current !== document.body && current !== document.documentElement) {
       const text = elementText(current).toLowerCase();
 
-      if (
-        text.includes("workspace") &&
-        !isWrongLargeContainer(current) &&
-        looksLikePanel(current)
-      ) {
+      if (text.includes("workspace") && !isWrongLargeContainer(current) && looksLikePanel(current)) {
         best = current;
       }
 
@@ -132,8 +128,6 @@
   function findCreateVoicePanel() {
     const candidates = Array.from(document.querySelectorAll("section, article, fieldset, div"));
 
-    let best = null;
-
     for (const candidate of candidates) {
       if (candidate.id === CARD_ID) continue;
 
@@ -143,18 +137,14 @@
       if (text.includes("choose voice") || text.includes("generate narration")) continue;
       if (!looksLikePanel(candidate)) continue;
 
-      if (!best || candidate.offsetWidth > best.offsetWidth) {
-        best = candidate;
-      }
+      return candidate;
     }
 
-    return best;
+    return null;
   }
 
   function mountCard(card) {
-    const currentParent = card.parentElement;
-
-    if (currentParent) {
+    if (card.parentElement) {
       card.remove();
     }
 
@@ -197,7 +187,7 @@
           <div class="smx-usage-grid">
             <div class="smx-usage-stat">
               <div class="smx-usage-label">Plan</div>
-              <div class="smx-usage-value" data-usage-plan>—</div>
+              <div class="smx-usage-value" data-usage-plan data-plan-key="">—</div>
             </div>
             <div class="smx-usage-stat">
               <div class="smx-usage-label">Used this month</div>
@@ -217,6 +207,8 @@
 
           <div class="smx-usage-actions">
             <button type="button" class="smx-usage-refresh">Refresh usage</button>
+            <button type="button" class="smx-billing-manage">Manage billing</button>
+            <button type="button" class="smx-billing-upgrade">Upgrade plan</button>
           </div>
         </div>
       `;
@@ -224,6 +216,9 @@
       card.querySelector(".smx-usage-refresh")?.addEventListener("click", () => {
         refreshUsage({ force: true });
       });
+
+      card.querySelector(".smx-billing-manage")?.addEventListener("click", openBillingPortal);
+      card.querySelector(".smx-billing-upgrade")?.addEventListener("click", openUpgradeCheckout);
     }
 
     mountCard(card);
@@ -273,6 +268,7 @@
     const usage = payload.usage || {};
 
     const planLabel = subscription.planLabel || subscription.plan || subscription.planKey || "Starter";
+    const planKey = subscription.planKey || subscription.plan || "starter";
     const status = subscription.status || "active";
     const used = normaliseNumber(usage.usedCredits) || 0;
     const limit = normaliseNumber(usage.monthlyCreditLimit);
@@ -298,9 +294,18 @@
       pill.textContent = status;
     }
 
-    if (plan) plan.textContent = planLabel;
-    if (usedNode) usedNode.textContent = limit === null ? `${formatCredits(used)} used` : `${formatCredits(used)} / ${formatCredits(limit)}`;
-    if (remainingNode) remainingNode.textContent = formatCredits(remaining);
+    if (plan) {
+      plan.textContent = planLabel;
+      plan.dataset.planKey = planKey;
+    }
+
+    if (usedNode) {
+      usedNode.textContent = limit === null ? `${formatCredits(used)} used` : `${formatCredits(used)} / ${formatCredits(limit)}`;
+    }
+
+    if (remainingNode) {
+      remainingNode.textContent = formatCredits(remaining);
+    }
 
     let percent = 0;
 
@@ -344,6 +349,123 @@
 
     if (message) {
       message.innerHTML = `<strong>Could not load usage.</strong> ${escapeHtml(error.message || String(error))}`;
+    }
+  }
+
+  function nextUpgradePlan(currentPlan) {
+    const plan = String(currentPlan || "starter").toLowerCase();
+
+    if (plan.includes("starter")) return "pro";
+    if (plan.includes("pro")) return "business";
+    if (plan.includes("business")) return "enterprise";
+
+    return "pro";
+  }
+
+  async function openBillingPortal() {
+    const card = createCard();
+    const workspaceId = currentWorkspaceId();
+    const message = card.querySelector(".smx-usage-message");
+    const manageButton = card.querySelector(".smx-billing-manage");
+
+    if (manageButton) {
+      manageButton.disabled = true;
+      manageButton.textContent = "Opening...";
+    }
+
+    try {
+      const response = await fetch("/api/billing/portal/stripe", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ workspaceId })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || data.ok === false) {
+        throw new Error(data.message || data.error || "Could not open billing portal");
+      }
+
+      if (data.portalUrl) {
+        window.open(data.portalUrl, "_blank", "noopener,noreferrer");
+      }
+
+      if (message) {
+        message.innerHTML = "<strong>Billing portal opened.</strong> Return here after making billing changes.";
+      }
+    } catch (error) {
+      if (message) {
+        message.innerHTML = `<strong>Billing portal unavailable.</strong> ${escapeHtml(error.message || String(error))}`;
+      }
+    } finally {
+      if (manageButton) {
+        manageButton.disabled = false;
+        manageButton.textContent = "Manage billing";
+      }
+
+      scheduleRefresh();
+    }
+  }
+
+  async function openUpgradeCheckout() {
+    const card = createCard();
+    const workspaceId = currentWorkspaceId();
+    const message = card.querySelector(".smx-usage-message");
+    const upgradeButton = card.querySelector(".smx-billing-upgrade");
+    const planNode = card.querySelector("[data-usage-plan]");
+    const currentPlan = planNode?.dataset?.planKey || planNode?.textContent || "starter";
+    const planKey = nextUpgradePlan(currentPlan);
+
+    if (planKey === "enterprise") {
+      if (message) {
+        message.innerHTML = "<strong>Enterprise plan.</strong> Please contact the account team for enterprise billing.";
+      }
+      return;
+    }
+
+    if (upgradeButton) {
+      upgradeButton.disabled = true;
+      upgradeButton.textContent = "Opening...";
+    }
+
+    try {
+      const response = await fetch("/api/billing/checkout/stripe", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          workspaceId,
+          planKey
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || data.ok === false) {
+        throw new Error(data.message || data.error || "Could not open Stripe Checkout");
+      }
+
+      if (data.checkoutUrl) {
+        window.open(data.checkoutUrl, "_blank", "noopener,noreferrer");
+      }
+
+      if (message) {
+        message.innerHTML = `<strong>Checkout opened.</strong> Complete checkout to move this workspace to ${escapeHtml(data.planLabel || planKey)}.`;
+      }
+    } catch (error) {
+      if (message) {
+        message.innerHTML = `<strong>Checkout unavailable.</strong> ${escapeHtml(error.message || String(error))}`;
+      }
+    } finally {
+      if (upgradeButton) {
+        upgradeButton.disabled = false;
+        upgradeButton.textContent = "Upgrade plan";
+      }
+
+      scheduleRefresh();
     }
   }
 
