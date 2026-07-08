@@ -1219,6 +1219,77 @@ if "billing_stripe_price_catalog_sync" not in app.view_functions:
                 "message": str(exc),
             }), 500
 
+
+
+# ---------------------------------------------------------------------
+# Admin persistence status
+# ---------------------------------------------------------------------
+if "admin_persistence_status" not in app.view_functions:
+    @app.get("/api/admin/persistence/status", endpoint="admin_persistence_status")
+    def admin_persistence_status():
+        from flask import jsonify, request
+
+        from services.auth_context import (
+            AuthError,
+            auth_context_from_request,
+            auth_error_payload,
+            require_admin,
+        )
+        from services.persistence_status import persistence_status_payload
+
+        ctx = auth_context_from_request(request)
+
+        try:
+            require_admin(ctx)
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+
+        return jsonify({
+            "ok": True,
+            **persistence_status_payload(),
+        })
+
+
+
+# ---------------------------------------------------------------------
+# Hard guard for Admin Persistence Status API
+# Prevents /api/admin/persistence/status from falling through to Media Studio.
+# ---------------------------------------------------------------------
+@app.before_request
+def syntaxmatrix_persistence_status_before_request_guard():
+    from flask import jsonify, request
+
+    if request.path.rstrip("/") != "/api/admin/persistence/status":
+        return None
+
+    if request.method.upper() != "GET":
+        return jsonify({
+            "ok": False,
+            "error": "Method not allowed.",
+            "endpoint": "/api/admin/persistence/status",
+        }), 405
+
+    from services.auth_context import (
+        AuthError,
+        auth_context_from_request,
+        auth_error_payload,
+        require_admin,
+    )
+    from services.persistence_status import persistence_status_payload
+
+    ctx = auth_context_from_request(request)
+
+    try:
+        require_admin(ctx)
+    except AuthError as exc:
+        return jsonify(auth_error_payload(exc)), exc.status_code
+
+    return jsonify({
+        "ok": True,
+        **persistence_status_payload(),
+    })
+
+
 if __name__ == "__main__":
     print("SyntaxMatrix Media Studio Flask")
     print(f"Open: http://{HOST}:{PORT}")
