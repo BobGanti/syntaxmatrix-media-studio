@@ -85,12 +85,33 @@ def _write_json(path: pathlib.Path, data: Any) -> None:
 
 
 def _append_jsonl(path: pathlib.Path, row: dict[str, Any]) -> None:
+    if path == EVENT_LOG_PATH:
+        try:
+            from services.persistence_repository import get_persistence_repository
+
+            get_persistence_repository().append_stripe_webhook_event(row)
+            return
+        except Exception:
+            pass
+
     _ensure_billing_dir()
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 
-
 def _load_subscriptions() -> dict[str, dict[str, Any]]:
+    try:
+        from services.persistence_repository import list_workspace_subscriptions
+
+        rows = list_workspace_subscriptions()
+
+        return {
+            str(record["workspaceId"]): dict(record)
+            for record in rows
+            if isinstance(record, dict) and record.get("workspaceId")
+        }
+    except Exception:
+        pass
+
     data = _read_json(SUBSCRIPTIONS_PATH, {})
 
     if isinstance(data, dict) and isinstance(data.get("subscriptions"), dict):
@@ -113,8 +134,23 @@ def _load_subscriptions() -> dict[str, dict[str, Any]]:
     return {}
 
 
+
 def _save_subscriptions(records: dict[str, dict[str, Any]]) -> None:
+    try:
+        from services.persistence_repository import get_persistence_repository
+
+        repo = get_persistence_repository()
+
+        for workspace_id, record in records.items():
+            if isinstance(record, dict):
+                repo.upsert_workspace_subscription(str(workspace_id), dict(record))
+
+        return
+    except Exception:
+        pass
+
     _write_json(SUBSCRIPTIONS_PATH, records)
+
 
 
 def _plan_for_key(plan_key: str) -> dict[str, Any]:
@@ -140,6 +176,13 @@ def _unix_to_iso(value: Any) -> str:
 
 
 def _processed_events() -> set[str]:
+    try:
+        from services.persistence_repository import processed_stripe_event_ids
+
+        return processed_stripe_event_ids()
+    except Exception:
+        pass
+
     data = _read_json(PROCESSED_EVENTS_PATH, [])
 
     if isinstance(data, list):
@@ -151,14 +194,24 @@ def _processed_events() -> set[str]:
     return set()
 
 
+
 def _mark_processed(event_id: str) -> None:
     event_id = _clean(event_id)
 
     if not event_id:
         return
 
+    try:
+        from services.persistence_repository import get_persistence_repository
+
+        get_persistence_repository().mark_stripe_event_processed(event_id)
+        return
+    except Exception:
+        pass
+
     events = sorted(_processed_events() | {event_id})
     _write_json(PROCESSED_EVENTS_PATH, events[-5000:])
+
 
 
 def _find_workspace_by_subscription_id(subscription_id: str) -> str:
@@ -166,6 +219,16 @@ def _find_workspace_by_subscription_id(subscription_id: str) -> str:
 
     if not subscription_id:
         return ""
+
+    try:
+        from services.persistence_repository import find_workspace_subscription_by_stripe_subscription_id
+
+        record = find_workspace_subscription_by_stripe_subscription_id(subscription_id)
+
+        if isinstance(record, dict) and record.get("workspaceId"):
+            return _clean(record.get("workspaceId"))
+    except Exception:
+        pass
 
     for workspace_id, record in _load_subscriptions().items():
         if (
@@ -175,6 +238,7 @@ def _find_workspace_by_subscription_id(subscription_id: str) -> str:
             return workspace_id
 
     return ""
+
 
 
 def _upsert_workspace_subscription(

@@ -1290,6 +1290,97 @@ def syntaxmatrix_persistence_status_before_request_guard():
     })
 
 
+
+
+# ---------------------------------------------------------------------
+# Hard guard for Admin Persistence Repository Status API
+# ---------------------------------------------------------------------
+@app.before_request
+def syntaxmatrix_persistence_repository_status_guard():
+    from flask import jsonify, request
+
+    if request.path.rstrip("/") != "/api/admin/persistence/repository/status":
+        return None
+
+    if request.method.upper() != "GET":
+        return jsonify({
+            "ok": False,
+            "error": "Method not allowed.",
+            "endpoint": "/api/admin/persistence/repository/status",
+        }), 405
+
+    from services.auth_context import (
+        AuthError,
+        auth_context_from_request,
+        auth_error_payload,
+        require_admin,
+    )
+    from services.persistence_repository import repository_smoke_test
+
+    ctx = auth_context_from_request(request)
+
+    try:
+        require_admin(ctx)
+    except AuthError as exc:
+        return jsonify(auth_error_payload(exc)), exc.status_code
+
+    return jsonify({
+        "ok": True,
+        **repository_smoke_test(),
+    })
+
+
+
+
+# ---------------------------------------------------------------------
+# Hard guard for repository wiring status
+# ---------------------------------------------------------------------
+@app.before_request
+def syntaxmatrix_repository_wiring_status_guard():
+    from flask import jsonify, request
+
+    if request.path.rstrip("/") != "/api/admin/persistence/wiring/status":
+        return None
+
+    if request.method.upper() != "GET":
+        return jsonify({
+            "ok": False,
+            "error": "Method not allowed.",
+            "endpoint": "/api/admin/persistence/wiring/status",
+        }), 405
+
+    from services.auth_context import (
+        AuthError,
+        auth_context_from_request,
+        auth_error_payload,
+        require_admin,
+    )
+    from services.persistence_repository import get_persistence_repository, repository_smoke_test
+
+    ctx = auth_context_from_request(request)
+
+    try:
+        require_admin(ctx)
+    except AuthError as exc:
+        return jsonify(auth_error_payload(exc)), exc.status_code
+
+    repo = get_persistence_repository()
+    smoke = repository_smoke_test()
+
+    return jsonify({
+        "ok": True,
+        "backend": repo.backend_name,
+        "repository": smoke,
+        "wired": {
+            "subscriptionEnforcementReads": True,
+            "usageCreditReads": True,
+            "stripeWebhookSubscriptionWrites": True,
+            "stripeWebhookProcessedEvents": True,
+            "stripeWebhookEventLogging": True,
+        },
+    })
+
+
 if __name__ == "__main__":
     print("SyntaxMatrix Media Studio Flask")
     print(f"Open: http://{HOST}:{PORT}")

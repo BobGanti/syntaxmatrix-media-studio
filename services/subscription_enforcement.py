@@ -154,6 +154,16 @@ def _default_subscription(workspace_id: str) -> dict[str, Any]:
 
 
 def _subscription_from_file(workspace_id: str) -> dict[str, Any]:
+    try:
+        from services.persistence_repository import get_persistence_repository
+
+        record = get_persistence_repository().get_workspace_subscription(workspace_id)
+
+        if isinstance(record, dict) and record:
+            return dict(record)
+    except Exception:
+        pass
+
     data = _read_json(SUBSCRIPTIONS_PATH, {})
 
     if isinstance(data, dict) and isinstance(data.get("subscriptions"), dict):
@@ -170,6 +180,7 @@ def _subscription_from_file(workspace_id: str) -> dict[str, Any]:
                 return dict(row)
 
     return _default_subscription(workspace_id)
+
 
 
 def get_subscription_for_entitlement(workspace_id: str) -> dict[str, Any]:
@@ -333,12 +344,20 @@ def _used_credits_from_jsonl(workspace_id: str) -> float:
 
 
 def used_credits_this_month(workspace_id: str) -> float:
+    try:
+        from services.persistence_repository import get_persistence_repository
+
+        return max(0.0, get_persistence_repository().usage_credits_this_month(workspace_id))
+    except Exception:
+        pass
+
     value = _used_credits_from_usage_summary(workspace_id)
 
     if value is not None:
         return max(0.0, value)
 
     return max(0.0, _used_credits_from_jsonl(workspace_id))
+
 
 
 def _extract_text_from_request(flask_request) -> str:
