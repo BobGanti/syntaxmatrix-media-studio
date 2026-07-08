@@ -418,19 +418,34 @@
     const currentPlan = planNode?.dataset?.planKey || planNode?.textContent || "starter";
     const planKey = nextUpgradePlan(currentPlan);
 
-    if (planKey === "enterprise") {
-      if (message) {
-        message.innerHTML = "<strong>Enterprise plan.</strong> Please contact the account team for enterprise billing.";
-      }
-      return;
-    }
-
     if (upgradeButton) {
       upgradeButton.disabled = true;
       upgradeButton.textContent = "Opening...";
     }
 
     try {
+      const portalStatusResponse = await fetch(`/api/billing/portal/stripe/status?workspaceId=${encodeURIComponent(workspaceId)}&t=${Date.now()}`, {
+        cache: "no-store"
+      });
+
+      const portalStatus = await portalStatusResponse.json().catch(() => ({}));
+
+      if (portalStatus.ok && portalStatus.hasStripeCustomer) {
+        if (message) {
+          message.innerHTML = "<strong>Opening billing portal.</strong> Existing subscriptions are managed there to avoid duplicate subscriptions.";
+        }
+
+        await openBillingPortal();
+        return;
+      }
+
+      if (planKey === "enterprise") {
+        if (message) {
+          message.innerHTML = "<strong>Enterprise plan.</strong> Please contact the account team for enterprise billing.";
+        }
+        return;
+      }
+
       const response = await fetch("/api/billing/checkout/stripe", {
         method: "POST",
         headers: {
@@ -457,7 +472,7 @@
       }
     } catch (error) {
       if (message) {
-        message.innerHTML = `<strong>Checkout unavailable.</strong> ${escapeHtml(error.message || String(error))}`;
+        message.innerHTML = `<strong>Billing action unavailable.</strong> ${escapeHtml(error.message || String(error))}`;
       }
     } finally {
       if (upgradeButton) {
@@ -468,6 +483,7 @@
       scheduleRefresh();
     }
   }
+
 
   let refreshTimer = null;
   let inFlight = null;

@@ -56,6 +56,7 @@ usage/*.tmp
 billing/workspace_subscriptions.json
 billing/stripe_webhook_events.jsonl
 billing/stripe_processed_events.json
+billing/stripe_price_map.json
 billing/*.tmp
 
 # Customer/workspace demo/local state
@@ -118,3 +119,5 @@ desktop.ini
 build/
 dist/
 *.egg-info/
+# Stripe Product/Price IDs are environment-specific.
+billing/stripe_price_map.json

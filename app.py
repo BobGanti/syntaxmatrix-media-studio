@@ -1131,6 +1131,94 @@ if "billing_stripe_customer_portal_status" not in app.view_functions:
             **stripe_customer_portal_status_payload(workspace_id),
         })
 
+
+
+# ---------------------------------------------------------------------
+# Admin Stripe Product/Price catalog sync
+# ---------------------------------------------------------------------
+if "billing_stripe_price_catalog_status" not in app.view_functions:
+    @app.get("/api/billing/stripe/catalog/status", endpoint="billing_stripe_price_catalog_status")
+    def billing_stripe_price_catalog_status():
+        from flask import jsonify, request
+
+        from services.auth_context import (
+            AuthError,
+            auth_context_from_request,
+            auth_error_payload,
+            require_admin,
+        )
+        from services.stripe_price_catalog import stripe_price_catalog_status_payload
+
+        ctx = auth_context_from_request(request)
+
+        try:
+            require_admin(ctx)
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+
+        return jsonify({
+            "ok": True,
+            **stripe_price_catalog_status_payload(),
+        })
+
+
+if "billing_stripe_price_catalog_sync" not in app.view_functions:
+    @app.post("/api/billing/stripe/catalog/sync", endpoint="billing_stripe_price_catalog_sync")
+    def billing_stripe_price_catalog_sync():
+        from flask import jsonify, request
+
+        from services.auth_context import (
+            AuthError,
+            auth_context_from_request,
+            auth_error_payload,
+            require_admin,
+        )
+        from services.stripe_price_catalog import (
+            StripePriceCatalogError,
+            StripePriceCatalogNotConfigured,
+            sync_stripe_price_catalog,
+        )
+
+        ctx = auth_context_from_request(request)
+
+        try:
+            require_admin(ctx)
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+
+        try:
+            payload = sync_stripe_price_catalog()
+
+            return jsonify({
+                "ok": True,
+                **payload,
+            })
+
+        except StripePriceCatalogNotConfigured as exc:
+            return jsonify({
+                "ok": False,
+                "provider": "stripe",
+                "configured": False,
+                "error": str(exc),
+                "message": str(exc),
+            }), 501
+
+        except StripePriceCatalogError as exc:
+            return jsonify({
+                "ok": False,
+                "provider": "stripe",
+                "error": str(exc),
+                "message": str(exc),
+            }), 400
+
+        except Exception as exc:
+            return jsonify({
+                "ok": False,
+                "provider": "stripe",
+                "error": str(exc),
+                "message": str(exc),
+            }), 500
+
 if __name__ == "__main__":
     print("SyntaxMatrix Media Studio Flask")
     print(f"Open: http://{HOST}:{PORT}")
