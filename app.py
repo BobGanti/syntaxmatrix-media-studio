@@ -943,6 +943,94 @@ if "billing_stripe_webhook_status" not in app.view_functions:
             **stripe_webhook_status_payload(),
         })
 
+
+
+# ---------------------------------------------------------------------
+# Subscription enforcement for paid Clone Voice product actions
+# ---------------------------------------------------------------------
+@app.before_request
+def syntaxmatrix_subscription_enforcement_guard():
+    from flask import jsonify, request
+
+    if not request.path.rstrip("/").startswith("/api/clone-voice/"):
+        return None
+
+    from services.auth_context import (
+        AuthError,
+        auth_context_from_request,
+        auth_error_payload,
+        require_workspace_access,
+    )
+    from services.subscription_enforcement import evaluate_flask_request
+
+    ctx = auth_context_from_request(request)
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+
+    workspace_id = (
+        request.args.get("workspaceId")
+        or request.form.get("workspaceId")
+        or data.get("workspaceId")
+        or ctx.workspace_id
+    )
+
+    try:
+        require_workspace_access(ctx, workspace_id)
+    except AuthError as exc:
+        return jsonify(auth_error_payload(exc)), exc.status_code
+
+    entitlement = evaluate_flask_request(request, ctx)
+
+    if not entitlement.get("enforced"):
+        return None
+
+    if entitlement.get("allowed"):
+        return None
+
+    return jsonify({
+        "ok": False,
+        "error": entitlement.get("message"),
+        "message": entitlement.get("message"),
+        "billingRequired": True,
+        "billing": entitlement,
+    }), 402
+
+
+if "billing_entitlement_status" not in app.view_functions:
+    @app.get("/api/billing/entitlement", endpoint="billing_entitlement_status")
+    def billing_entitlement_status():
+        from flask import jsonify, request
+
+        from services.auth_context import (
+            AuthError,
+            auth_context_from_request,
+            auth_error_payload,
+            require_workspace_access,
+        )
+        from services.subscription_enforcement import entitlement_payload
+
+        ctx = auth_context_from_request(request)
+        workspace_id = request.args.get("workspaceId") or ctx.workspace_id
+        action = request.args.get("action") or "status"
+        requested_credits = request.args.get("requestedCredits") or request.args.get("credits") or 0
+
+        try:
+            require_workspace_access(ctx, workspace_id)
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+
+        return jsonify({
+            "ok": True,
+            **entitlement_payload(
+                workspace_id=workspace_id,
+                action=action,
+                requested_credits=requested_credits,
+            ),
+        })
+
+
 if __name__ == "__main__":
     print("SyntaxMatrix Media Studio Flask")
     print(f"Open: http://{HOST}:{PORT}")
