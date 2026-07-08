@@ -4,23 +4,29 @@
   <meta charset="utf-8">
   <title>Clone Voice Admin</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="/clone_voice/admin.css?v=gender-required-1">
+  <link rel="stylesheet" href="/clone_voice/admin.css?v=split-finance-admin-1">
 </head>
 <body>
   <main class="shell">
     <header class="hero">
       <p class="eyebrow">SyntaxMatrix Media Studio</p>
       <h1>Clone Voice Admin</h1>
-      <p>Configure Clone Voice limits and manage system voices.</p>
-      <p><a href="/tasks/clone-voice">← Back to Clone Voice</a></p>
+      <p>Configure Clone Voice and manage global system voices.</p>
+
+      <div class="hero-actions">
+        <a class="admin-link" href="/tasks/clone-voice">← Back to Clone Voice</a>
+        <a class="finance-link" href="/admin/clone-voice/billing" target="_blank" rel="noopener noreferrer">Open Finance Console ↗</a>
+      </div>
     </header>
 
-    <section class="card">
-      <h2>Voice source duration</h2>
-      <p class="status">
-        D controls the maximum seconds allowed for uploaded or recorded voice source audio.
-        The client recorder auto-stops at this value, and the backend trims source audio to this value before creating the voice parameter.
-      </p>
+    <section class="admin-panel panel-duration">
+      <div class="panel-heading">
+        <span class="panel-number">1</span>
+        <div>
+          <h2>Voice source duration</h2>
+          <p>D controls upload/record source duration before voice parameter creation.</p>
+        </div>
+      </div>
 
       <form id="durationForm" class="form-grid">
         <label>
@@ -34,11 +40,14 @@
       <div id="durationStatusBox" class="status-box">Loading setting...</div>
     </section>
 
-    <section class="card">
-      <h2>System voices</h2>
-      <p class="status">
-        Upload a system voice source, set its display name and gender, then the system creates a stable voice parameter and a standard synthesized preview.
-      </p>
+    <section class="admin-panel panel-system">
+      <div class="panel-heading">
+        <span class="panel-number">2</span>
+        <div>
+          <h2>System voices</h2>
+          <p>Create and manage global voices available to all client workspaces.</p>
+        </div>
+      </div>
 
       <form id="systemVoiceForm" class="system-form">
         <label>
@@ -77,7 +86,6 @@
             <option value="">All voices</option>
             <option value="M">Male voices</option>
             <option value="F">Female voices</option>
-            
           </select>
         </label>
 
@@ -90,6 +98,6 @@
     </section>
   </main>
 
-  <script src="/clone_voice/admin.js?v=gender-required-1"></script>
+  <script src="/clone_voice/admin.js?v=split-finance-admin-1"></script>
 </body>
 </html>

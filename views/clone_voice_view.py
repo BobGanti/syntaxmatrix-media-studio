@@ -22,6 +22,11 @@ def clone_voice_admin_page():
     return send_from_directory(_clone_voice_frontend_dir(), "admin.html")
 
 
+@bp.get("/admin/clone-voice/billing")
+def clone_voice_billing_admin_page():
+    return send_from_directory(_clone_voice_frontend_dir(), "billing.html")
+
+
 @bp.get("/tasks/voice-clone")
 def old_voice_clone_redirect():
     return redirect("/tasks/clone-voice", code=302)

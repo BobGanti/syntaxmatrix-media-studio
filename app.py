@@ -1,5 +1,37 @@
 from __future__ import annotations
 
+# ---------------------------------------------------------------------
+# Local .env loader
+# Loads simple KEY=VALUE pairs before services read os.getenv().
+# Does not print secrets.
+# ---------------------------------------------------------------------
+def _load_local_env_file():
+    import os
+    from pathlib import Path
+
+    env_path = Path(__file__).resolve().parent / ".env"
+
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_local_env_file()
+
+
+
 import base64
 import json
 import mimetypes
@@ -34,6 +66,25 @@ if load_dotenv:
     load_dotenv(ROOT / ".env")
 
 app = Flask(__name__, static_folder=None)
+
+
+# ---------------------------------------------------------------------
+# Clone Voice Finance Console hard route guard
+# Runs before normal Flask routing so /admin/clone-voice/billing cannot
+# fall through to the general Media Studio page.
+# ---------------------------------------------------------------------
+@app.before_request
+def clone_voice_finance_console_before_request_guard():
+    from pathlib import Path
+    from flask import request, send_from_directory
+
+    if request.path.rstrip("/") == "/admin/clone-voice/billing":
+        frontend_dir = Path(__file__).resolve().parent / "frontend" / "clone_voice"
+        return send_from_directory(frontend_dir, "billing.html")
+
+    return None
+
+
 app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("ALIBABA_MEDIA_MAX_UPLOAD_MB", "80")) * 1024 * 1024
 
 HOST = os.getenv("ALIBABA_MEDIA_HOST", "127.0.0.1")
@@ -539,6 +590,358 @@ def upload_too_large(_exc):
 def unhandled(exc):
     traceback.print_exc()
     return _json_error(str(exc), 500)
+
+
+
+# ---------------------------------------------------------------------
+# Clone Voice Finance Console
+# Direct route guard so /admin/clone-voice/billing does not fall through
+# to the general Media Studio page.
+# ---------------------------------------------------------------------
+if "clone_voice_finance_console_page" not in app.view_functions:
+    @app.get("/admin/clone-voice/billing", endpoint="clone_voice_finance_console_page")
+    def clone_voice_finance_console_page():
+        from pathlib import Path
+        from flask import send_from_directory
+
+        frontend_dir = Path(__file__).resolve().parent / "frontend" / "clone_voice"
+        return send_from_directory(frontend_dir, "billing.html")
+
+
+
+
+# ---------------------------------------------------------------------
+# SyntaxMatrix Media Studio dev access-control boundary
+# ---------------------------------------------------------------------
+
+
+if "auth_context_status" not in app.view_functions:
+    @app.get("/api/auth/context", endpoint="auth_context_status")
+    def auth_context_status():
+        from flask import jsonify, request
+        from services.auth_context import auth_context_from_request
+
+        ctx = auth_context_from_request(request)
+
+        return jsonify({
+            "ok": True,
+            **ctx.to_payload(),
+            "notes": [
+                "Development auth boundary is active.",
+                "Use DEV_AUTH_ROLE=admin for admin testing.",
+                "Use DEV_AUTH_ROLE=client and DEV_AUTH_WORKSPACE_ID=<workspace> for client testing.",
+                "Replace services.auth_context with real login/JWT/session auth before production.",
+            ],
+        })
+
+
+
+
+# ---------------------------------------------------------------------
+# Customer / workspace / membership foundation routes
+# ---------------------------------------------------------------------
+if "account_workspaces" not in app.view_functions:
+    @app.get("/api/account/workspaces", endpoint="account_workspaces")
+    def account_workspaces():
+        from flask import jsonify, request
+        from services.auth_context import auth_context_from_request
+        from services.customer_workspace import workspace_selector_payload
+
+        ctx = auth_context_from_request(request)
+        payload = workspace_selector_payload(ctx.user_id, ctx.role, ctx.workspace_id)
+
+        return jsonify({
+            "ok": True,
+            **payload,
+        })
+
+
+if "admin_customer_workspace_index" not in app.view_functions:
+    @app.get("/api/admin/workspaces", endpoint="admin_customer_workspace_index")
+    def admin_customer_workspace_index():
+        from flask import jsonify, request
+        from services.auth_context import AuthError, auth_context_from_request, auth_error_payload, require_admin
+        from services.customer_workspace import list_customers, list_memberships, list_workspaces
+
+        ctx = auth_context_from_request(request)
+
+        try:
+            require_admin(ctx)
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+
+        return jsonify({
+            "ok": True,
+            "customers": list_customers(),
+            "workspaces": list_workspaces(),
+            "memberships": list_memberships(),
+        })
+
+
+if "admin_customer_create" not in app.view_functions:
+    @app.post("/api/admin/customers", endpoint="admin_customer_create")
+    def admin_customer_create():
+        from flask import jsonify, request
+        from services.auth_context import AuthError, auth_context_from_request, auth_error_payload, require_admin
+        from services.customer_workspace import create_customer
+
+        ctx = auth_context_from_request(request)
+
+        try:
+            require_admin(ctx)
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+
+        data = request.get_json(silent=True) or {}
+
+        try:
+            customer = create_customer(
+                name=data.get("name"),
+                billing_email=data.get("billingEmail") or data.get("billing_email") or "",
+                customer_id=data.get("customerId") or data.get("customer_id") or "",
+            )
+            return jsonify({"ok": True, "customer": customer})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc), "message": str(exc)}), 400
+
+
+if "admin_workspace_create" not in app.view_functions:
+    @app.post("/api/admin/workspaces", endpoint="admin_workspace_create")
+    def admin_workspace_create():
+        from flask import jsonify, request
+        from services.auth_context import AuthError, auth_context_from_request, auth_error_payload, require_admin
+        from services.customer_workspace import create_workspace
+
+        ctx = auth_context_from_request(request)
+
+        try:
+            require_admin(ctx)
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+
+        data = request.get_json(silent=True) or {}
+
+        try:
+            workspace = create_workspace(
+                customer_id=data.get("customerId") or data.get("customer_id"),
+                label=data.get("label"),
+                workspace_id=data.get("workspaceId") or data.get("workspace_id") or "",
+                subscription_owner_user_id=data.get("subscriptionOwnerUserId") or data.get("subscription_owner_user_id") or "",
+            )
+            return jsonify({"ok": True, "workspace": workspace})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc), "message": str(exc)}), 400
+
+
+if "admin_membership_create" not in app.view_functions:
+    @app.post("/api/admin/memberships", endpoint="admin_membership_create")
+    def admin_membership_create():
+        from flask import jsonify, request
+        from services.auth_context import AuthError, auth_context_from_request, auth_error_payload, require_admin
+        from services.customer_workspace import add_workspace_membership
+
+        ctx = auth_context_from_request(request)
+
+        try:
+            require_admin(ctx)
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+
+        data = request.get_json(silent=True) or {}
+
+        try:
+            membership = add_workspace_membership(
+                user_id=data.get("userId") or data.get("user_id"),
+                workspace_id=data.get("workspaceId") or data.get("workspace_id"),
+                role=data.get("role") or "member",
+            )
+            return jsonify({"ok": True, "membership": membership})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc), "message": str(exc)}), 400
+
+
+
+
+# ---------------------------------------------------------------------
+# Stripe Checkout Session creation
+# ---------------------------------------------------------------------
+if "billing_stripe_checkout_session" not in app.view_functions:
+    @app.post("/api/billing/checkout/stripe", endpoint="billing_stripe_checkout_session")
+    def billing_stripe_checkout_session():
+        from flask import jsonify, request
+
+        from services.auth_context import (
+            AuthError,
+            auth_context_from_request,
+            auth_error_payload,
+            require_workspace_access,
+        )
+        from services.stripe_checkout import (
+            StripeCheckoutError,
+            StripeCheckoutNotConfigured,
+            create_stripe_checkout_session,
+        )
+
+        ctx = auth_context_from_request(request)
+        data = request.get_json(silent=True) or request.form
+
+        workspace_id = data.get("workspaceId") or ctx.workspace_id
+        plan_key = data.get("planKey") or data.get("plan") or "starter"
+        customer_email = data.get("customerEmail") or data.get("customer_email") or ""
+
+        try:
+            require_workspace_access(ctx, workspace_id)
+
+            payload = create_stripe_checkout_session(
+                workspace_id=workspace_id,
+                plan_key=plan_key,
+                user_id=ctx.user_id,
+                customer_email=customer_email,
+            )
+
+            return jsonify({
+                "ok": True,
+                **payload,
+            })
+
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+
+        except StripeCheckoutNotConfigured as exc:
+            return jsonify({
+                "ok": False,
+                "error": str(exc),
+                "message": str(exc),
+                "provider": "stripe",
+                "configured": False,
+            }), 501
+
+        except StripeCheckoutError as exc:
+            return jsonify({
+                "ok": False,
+                "error": str(exc),
+                "message": str(exc),
+                "provider": "stripe",
+            }), 400
+
+        except Exception as exc:
+            return jsonify({
+                "ok": False,
+                "error": str(exc),
+                "message": str(exc),
+                "provider": "stripe",
+            }), 500
+
+
+if "billing_stripe_checkout_status" not in app.view_functions:
+    @app.get("/api/billing/checkout/stripe/status", endpoint="billing_stripe_checkout_status")
+    def billing_stripe_checkout_status():
+        from flask import jsonify
+        from services.stripe_checkout import stripe_checkout_status_payload
+
+        return jsonify({
+            "ok": True,
+            **stripe_checkout_status_payload(),
+        })
+
+
+
+
+# ---------------------------------------------------------------------
+# Verified Stripe webhook handling
+# ---------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------
+# Verified Stripe webhook endpoint
+# ---------------------------------------------------------------------
+
+
+
+
+
+
+# ---------------------------------------------------------------------
+# Verified Stripe webhook endpoint
+# ---------------------------------------------------------------------
+@app.before_request
+def syntaxmatrix_verified_stripe_webhook_guard():
+    from flask import jsonify, request
+
+    if request.path.rstrip("/") != "/api/billing/webhook/stripe":
+        return None
+
+    if request.method.upper() != "POST":
+        return jsonify({
+            "ok": False,
+            "error": "Method not allowed. Stripe webhooks must POST to this endpoint.",
+            "endpoint": "/api/billing/webhook/stripe",
+        }), 405
+
+    from services.stripe_webhooks import (
+        StripeWebhookError,
+        StripeWebhookNotConfigured,
+        StripeWebhookSignatureError,
+        verify_and_process_stripe_webhook,
+    )
+
+    payload = request.get_data(cache=False, as_text=False)
+    signature_header = request.headers.get("Stripe-Signature", "")
+
+    try:
+        result = verify_and_process_stripe_webhook(payload, signature_header)
+
+        return jsonify({
+            "ok": True,
+            "received": True,
+            **result,
+        }), 200
+
+    except StripeWebhookNotConfigured as exc:
+        return jsonify({
+            "ok": False,
+            "received": False,
+            "configured": False,
+            "error": str(exc),
+            "message": str(exc),
+        }), exc.status_code
+
+    except StripeWebhookSignatureError as exc:
+        return jsonify({
+            "ok": False,
+            "received": False,
+            "verified": False,
+            "error": str(exc),
+            "message": str(exc),
+        }), exc.status_code
+
+    except StripeWebhookError as exc:
+        return jsonify({
+            "ok": False,
+            "received": False,
+            "error": str(exc),
+            "message": str(exc),
+        }), exc.status_code
+
+    except Exception as exc:
+        return jsonify({
+            "ok": False,
+            "received": False,
+            "error": str(exc),
+            "message": str(exc),
+        }), 500
+
+
+if "billing_stripe_webhook_status" not in app.view_functions:
+    @app.get("/api/billing/webhook/stripe/status", endpoint="billing_stripe_webhook_status")
+    def billing_stripe_webhook_status():
+        from flask import jsonify
+        from services.stripe_webhooks import stripe_webhook_status_payload
+
+        return jsonify({
+            "ok": True,
+            **stripe_webhook_status_payload(),
+        })
 
 if __name__ == "__main__":
     print("SyntaxMatrix Media Studio Flask")

@@ -1,0 +1,347 @@
+* { box-sizing: border-box; }
+
+:root {
+  --bg: #050d13;
+  --surface: #0d1824;
+  --border: rgba(255,255,255,.13);
+  --text: #edf7ff;
+  --muted: #a9bfd3;
+  --teal: #9ee8dc;
+  --blue: #82a8ff;
+  --amber: #ffd166;
+  --pink: #ff9fc1;
+  --green: #9ef0b8;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(158,240,184,.16), transparent 32%),
+    radial-gradient(circle at 92% 12%, rgba(255,209,102,.13), transparent 34%),
+    radial-gradient(circle at 50% 100%, rgba(255,159,193,.10), transparent 30%),
+    var(--bg);
+  color: var(--text);
+  padding: 32px;
+}
+
+.shell {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: grid;
+  gap: 22px;
+}
+
+.hero,
+.finance-panel {
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 22px;
+  background: rgba(13, 24, 36, .93);
+  box-shadow: 0 24px 70px rgba(0,0,0,.25);
+}
+
+.finance-hero {
+  background:
+    linear-gradient(135deg, rgba(158,240,184,.18), rgba(255,209,102,.12)),
+    rgba(13,24,36,.94);
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.admin-link,
+.client-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 12px 18px;
+  font-weight: 1000;
+  text-decoration: none;
+}
+
+.admin-link {
+  color: var(--green);
+  border: 1px solid rgba(158,240,184,.32);
+  background: rgba(7,16,23,.44);
+}
+
+.client-link {
+  color: #06130f;
+  background: linear-gradient(135deg, var(--teal), var(--blue));
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--green);
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+h1, h2, h3, p { margin-top: 0; }
+
+h1 {
+  margin-bottom: 8px;
+  font-size: clamp(2rem, 4vw, 3rem);
+}
+
+p,
+.status {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.panel-heading {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 18px;
+}
+
+.panel-number {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  color: #071017;
+  font-weight: 1000;
+}
+
+.panel-billing {
+  background:
+    linear-gradient(135deg, rgba(158,240,184,.14), rgba(7,16,25,.96)),
+    var(--surface);
+  border-color: rgba(158,240,184,.28);
+}
+
+.panel-billing .panel-number {
+  background: linear-gradient(135deg, var(--green), var(--teal));
+}
+
+.panel-pricing {
+  background:
+    linear-gradient(135deg, rgba(255,159,193,.14), rgba(7,16,25,.96)),
+    var(--surface);
+  border-color: rgba(255,159,193,.28);
+}
+
+.panel-pricing .panel-number {
+  background: linear-gradient(135deg, var(--pink), var(--amber));
+}
+
+label {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  font-weight: 900;
+}
+
+input, select, button { font: inherit; }
+
+input[type="number"],
+input[type="text"],
+select {
+  width: 100%;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 16px;
+  padding: 13px 14px;
+  background: rgba(7,16,23,.72);
+  color: #fff;
+  outline: none;
+}
+
+input:focus,
+select:focus {
+  border-color: rgba(158,240,184,.72);
+  box-shadow: 0 0 0 3px rgba(158,240,184,.12);
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  padding: 14px 22px;
+  background: linear-gradient(135deg, var(--green), var(--teal));
+  color: #06130f;
+  font-weight: 1000;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: rgba(7,16,23,.72);
+  color: var(--text);
+  border: 1px solid rgba(255,255,255,.15);
+}
+
+button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.billing-grid {
+  display: grid;
+  grid-template-columns: minmax(210px, 1fr) minmax(180px, .8fr) auto auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.billing-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0,1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.metric-card {
+  border: 1px solid rgba(158,240,184,.22);
+  border-radius: 18px;
+  padding: 14px;
+  background:
+    linear-gradient(135deg, rgba(158,240,184,.10), rgba(7,16,23,.72)),
+    rgba(7,16,23,.65);
+}
+
+.metric-label {
+  display: block;
+  color: var(--muted);
+  font-size: .88rem;
+  font-weight: 900;
+  margin-bottom: 8px;
+}
+
+.metric-card strong {
+  display: block;
+  font-size: 1.35rem;
+  overflow-wrap: anywhere;
+}
+
+.status-box {
+  margin: 16px 0;
+  background: rgba(7,16,23,.68);
+  border: 1px solid rgba(255,255,255,.13);
+  border-radius: 18px;
+  padding: 16px;
+  color: #dceaf5;
+  line-height: 1.55;
+}
+
+.status-box strong { color: var(--green); }
+
+.usage-list {
+  display: grid;
+  gap: 10px;
+}
+
+.usage-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 90px 90px 110px;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(7,16,23,.56);
+}
+
+.usage-row strong { color: var(--text); }
+.usage-row span { color: var(--muted); }
+
+.pricing-subpanel {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 18px;
+  background: rgba(7,16,23,.55);
+}
+
+.pricing-plan-grid,
+.pricing-rule-grid {
+  display: grid;
+  gap: 14px;
+  align-items: end;
+}
+
+.pricing-plan-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.pricing-rule-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 900px) {
+  body { padding: 16px; }
+
+  .hero,
+  .finance-panel {
+    border-radius: 20px;
+    padding: 16px;
+  }
+
+  .panel-heading {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .panel-number {
+    width: 42px;
+    height: 42px;
+    border-radius: 14px;
+  }
+
+  .billing-grid,
+  .pricing-plan-grid,
+  .pricing-rule-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .billing-cards {
+    grid-template-columns: repeat(2, minmax(0,1fr));
+  }
+
+  .usage-row {
+    grid-template-columns: 1fr;
+  }
+
+  button,
+  .admin-link,
+  .client-link {
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .billing-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* Step 26: Stripe Checkout */
+
+.billing-grid {
+  grid-template-columns: minmax(210px, 1fr) minmax(180px, .8fr) auto auto auto;
+}
+
+.stripe-cta {
+  background: linear-gradient(135deg, #635bff, var(--blue));
+  color: #ffffff;
+}
+
+@media (max-width: 1100px) {
+  .billing-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .billing-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,8 +1,120 @@
+# ============================================================
+# Python / Flask
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.coverage.*
+.cache/
+
+# ============================================================
+# Virtual environments
+# ============================================================
+.venv/
+venv/
+env/
+ENV/
+
+# ============================================================
+# Local environment / secrets
+# ============================================================
 .env
-*.zip
-venv
-.venv
-*.bak
-app.py.bak.*
-*.*.bak.*
-*.pyc
+.env.*
+!.env.example
+
+# Stripe keys, webhook secrets, local credentials must never be committed.
+*.secret
+*.key
+secrets/
+credentials/
+
+# ============================================================
+# Patch/backups/checkpoint noise
+# ============================================================
+*.bak.*
+_patch_backups/
+patches/
+reports/
+
+# ============================================================
+# Local runtime data
+# ============================================================
+*.tmp
+*.log
+logs/
+
+# Usage metering runtime ledger
+usage/*.jsonl
+usage/*.tmp
+
+# Billing runtime state
+billing/workspace_subscriptions.json
+billing/stripe_webhook_events.jsonl
+billing/stripe_processed_events.json
+billing/*.tmp
+
+# Customer/workspace demo/local state
+billing/customers.json
+billing/workspaces.json
+billing/memberships.json
+
+# Keep product pricing config tracked if present.
+!billing/pricing_config.json
+
+# ============================================================
+# Generated / uploaded media
+# ============================================================
+voices/
+workspaces/
+
+# Keep folder placeholders if you create them.
+!voices/.gitkeep
+!workspaces/.gitkeep
+
+# Generated audio/video/image files anywhere
+*.wav
+*.mp3
+*.m4a
+*.ogg
+*.webm
+*.mp4
+*.mov
+*.avi
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# Do not ignore frontend source images if you intentionally add assets later.
+# Add explicit exceptions here when needed, for example:
+# !frontend/assets/logo.png
+
+# ============================================================
+# Node / frontend tooling
+# ============================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ============================================================
+# OS / editor
+# ============================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# ============================================================
+# Build / distribution
+# ============================================================
+build/
+dist/
+*.egg-info/

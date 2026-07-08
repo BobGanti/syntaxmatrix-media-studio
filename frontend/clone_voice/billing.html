@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Finance Console</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/clone_voice/billing.css?v=stripe-checkout-1">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero finance-hero">
+      <p class="eyebrow">SyntaxMatrix Media Studio</p>
+      <h1>Finance Console</h1>
+      <p>Manage subscriptions, credits, pricing, provider costs, and margin assumptions.</p>
+
+      <div class="hero-actions">
+        <a class="admin-link" href="/admin/clone-voice">← Clone Voice Admin</a>
+        <a class="client-link" href="/tasks/clone-voice">Open Client</a>
+      </div>
+    </header>
+
+    <section class="finance-panel panel-billing">
+      <div class="panel-heading">
+        <span class="panel-number">1</span>
+        <div>
+          <h2>Billing & subscription</h2>
+          <p>Monitor credits, usage, and estimated workspace economics.</p>
+        </div>
+      </div>
+
+      <div class="billing-grid">
+        <label>
+          Workspace
+          <select id="billingWorkspaceSelect">
+            <option value="mock_user_001">Client A / Workspace 001</option>
+            <option value="mock_user_002">Client B / Workspace 002</option>
+          </select>
+        </label>
+
+        <label>
+          Plan
+          <select id="billingPlanSelect">
+            <option value="starter">Starter</option>
+            <option value="pro">Pro</option>
+            <option value="business">Business</option>
+            <option value="enterprise">Enterprise</option>
+          </select>
+        </label>
+
+        <button id="saveBillingPlanBtn" type="button">Save plan</button>
+        <button id="refreshBillingBtn" type="button" class="secondary">Refresh usage</button>
+        <button id="openStripeCheckoutBtn" type="button" class="stripe-cta">Open Stripe Checkout</button>
+      </div>
+
+      <div class="billing-cards">
+        <div class="metric-card">
+          <span class="metric-label">Current plan</span>
+          <strong id="billingCurrentPlan">—</strong>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Monthly limit</span>
+          <strong id="billingMonthlyLimit">—</strong>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Used</span>
+          <strong id="billingUsedCredits">—</strong>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Remaining</span>
+          <strong id="billingRemainingCredits">—</strong>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Monthly revenue</span>
+          <strong id="billingMonthlyRevenue">—</strong>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Est. provider cost</span>
+          <strong id="billingEstimatedCost">—</strong>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Est. margin</span>
+          <strong id="billingGrossMargin">—</strong>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Margin %</span>
+          <strong id="billingMarginPercent">—</strong>
+        </div>
+      </div>
+
+      <div id="billingStatusBox" class="status-box">Loading billing status...</div>
+
+      <h3>Usage breakdown</h3>
+      <div id="billingUsageBreakdown" class="usage-list">No usage loaded yet.</div>
+    </section>
+
+    <section class="finance-panel panel-pricing">
+      <div class="panel-heading">
+        <span class="panel-number">2</span>
+        <div>
+          <h2>Pricing & cost management</h2>
+          <p>Manage customer prices, credit rules, and internal provider cost assumptions.</p>
+        </div>
+      </div>
+
+      <div class="pricing-subpanel">
+        <h3>Plan pricing</h3>
+        <div class="pricing-plan-grid">
+          <label>
+            Starter monthly price
+            <input id="starterMonthlyPrice" type="number" min="0" step="0.01">
+          </label>
+          <label>
+            Starter credits
+            <input id="starterMonthlyCredits" type="number" min="0" step="1">
+          </label>
+
+          <label>
+            Pro monthly price
+            <input id="proMonthlyPrice" type="number" min="0" step="0.01">
+          </label>
+          <label>
+            Pro credits
+            <input id="proMonthlyCredits" type="number" min="0" step="1">
+          </label>
+
+          <label>
+            Business monthly price
+            <input id="businessMonthlyPrice" type="number" min="0" step="0.01">
+          </label>
+          <label>
+            Business credits
+            <input id="businessMonthlyCredits" type="number" min="0" step="1">
+          </label>
+
+          <label>
+            Enterprise monthly price
+            <input id="enterpriseMonthlyPrice" type="number" min="0" step="0.01">
+          </label>
+          <label>
+            Enterprise credits
+            <input id="enterpriseMonthlyCredits" type="text" placeholder="Blank = unlimited">
+          </label>
+        </div>
+      </div>
+
+      <div class="pricing-subpanel">
+        <h3>Credit consumption rules</h3>
+        <div class="pricing-rule-grid">
+          <label>
+            Voice creation credits
+            <input id="voiceParameterCredits" type="number" min="0" step="1">
+          </label>
+
+          <label>
+            Narration credits per second
+            <input id="narrationCreditsPerSecond" type="number" min="0" step="0.01">
+          </label>
+        </div>
+      </div>
+
+      <div class="pricing-subpanel">
+        <h3>Internal provider cost assumptions</h3>
+        <p class="status">Admin-only estimates. Update when Alibaba/OpenAI/Google provider pricing changes.</p>
+
+        <div class="pricing-rule-grid">
+          <label>
+            Voice creation provider cost
+            <input id="voiceProviderFixedCost" type="number" min="0" step="0.0001">
+          </label>
+
+          <label>
+            Narration provider cost per second
+            <input id="narrationProviderCostPerSecond" type="number" min="0" step="0.0001">
+          </label>
+        </div>
+      </div>
+
+      <button id="savePricingConfigBtn" type="button">Save pricing & costs</button>
+      <div id="pricingStatusBox" class="status-box">Loading pricing configuration...</div>
+    </section>
+  </main>
+
+  <script src="/clone_voice/billing.js?v=stripe-checkout-1"></script>
+</body>
+</html>

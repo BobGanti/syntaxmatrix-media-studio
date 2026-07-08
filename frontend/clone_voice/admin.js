@@ -43,10 +43,7 @@
     durationStatusBox.textContent = "Loading setting...";
 
     try {
-      const response = await fetch(`/api/clone-voice/settings?t=${Date.now()}`, {
-        cache: "no-store"
-      });
-
+      const response = await fetch(`/api/clone-voice/settings?t=${Date.now()}`, { cache: "no-store" });
       const data = await response.json();
 
       if (!response.ok || !data.ok) {
@@ -56,7 +53,6 @@
       durationInput.min = data.minSeconds || 5;
       durationInput.max = data.maxSeconds || 120;
       durationInput.value = data.maxVoiceSourceSeconds || 20;
-
       durationStatus(data, "Setting loaded.");
     } catch (error) {
       durationStatusBox.textContent = error.message || String(error);
@@ -68,17 +64,12 @@
 
     saveDurationBtn.disabled = true;
     saveDurationBtn.textContent = "Saving...";
-    durationStatusBox.textContent = "Saving setting...";
 
     try {
       const response = await fetch("/api/clone-voice/settings", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          maxVoiceSourceSeconds: Number(durationInput.value)
-        })
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxVoiceSourceSeconds: Number(durationInput.value) })
       });
 
       const data = await response.json();
@@ -113,18 +104,17 @@
 
     systemVoicesList.innerHTML = rows.map((voice) => {
       const previewButton = voice.previewUrl
-        ? `<button class="secondary" type="button" data-preview-url="${escapeHtml(voice.previewUrl)}">Preview</button>`
+        ? `<button class="secondary" type="button" data-preview-url="${escapeHtml(voice.previewUrl)}">▶</button>`
         : `<button class="secondary" type="button" disabled>No preview</button>`;
 
       return `
         <div class="voice-card">
           <div>
             <div class="voice-title">${escapeHtml(voice.label || voice.displayName || voice.voiceId)}</div>
-            <div class="voice-meta">Preview: standard synthesized sentence</div>
             <div class="voice-meta">${escapeHtml(voice.parameterPath || "")}</div>
           </div>
           ${previewButton}
-          <button class="danger" type="button" data-delete-voice-id="${escapeHtml(voice.voiceId)}" data-delete-label="${escapeHtml(voice.label || voice.voiceId)}">Delete</button>
+          <button class="danger" type="button" data-delete-voice-id="${escapeHtml(voice.voiceId)}" data-delete-label="${escapeHtml(voice.label || voice.voiceId)}">🗑</button>
         </div>
       `;
     }).join("");
@@ -134,10 +124,7 @@
     systemVoicesList.textContent = "Loading system voices...";
 
     try {
-      const response = await fetch(`/api/clone-voice/system-voices?t=${Date.now()}`, {
-        cache: "no-store"
-      });
-
+      const response = await fetch(`/api/clone-voice/system-voices?t=${Date.now()}`, { cache: "no-store" });
       const data = await response.json();
 
       if (!response.ok || !data.ok) {
@@ -156,7 +143,6 @@
       <strong>${escapeHtml(message)}</strong><br>
       Voice: ${escapeHtml(data.label || data.displayName || data.voiceId || "")}<br>
       Gender: ${escapeHtml(data.gender || "")}<br>
-      Preview: standard synthesized sentence<br>
       ${data.replaced ? "Existing voice replaced." : "New system voice created."}
     `;
   }
@@ -226,7 +212,6 @@
 
   async function deleteSystemVoice(voiceId, label) {
     const ok = confirm(`Delete system voice: ${label || voiceId}?`);
-
     if (!ok) return;
 
     systemVoiceStatusBox.textContent = `Deleting ${label || voiceId}...`;

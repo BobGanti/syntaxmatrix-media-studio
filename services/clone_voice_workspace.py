@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from services.customer_workspace import workspace_selector_payload
+
 from werkzeug.datastructures import FileStorage
 
 
@@ -225,6 +227,22 @@ def save_voice_parameter(paths: WorkspacePaths, voice_parameter: str, voice_id: 
     voice_id = safe_slug(voice_id)
     path = stable_parameter_path(paths, voice_id)
     path.write_text(str(voice_parameter), encoding="utf-8")
+
+    try:
+        from services.billing_usage import record_usage_event
+
+        record_usage_event(
+            paths.workspace_id,
+            "voice.parameter.saved",
+            quantity=1,
+            metadata={
+                "voiceId": voice_id,
+                "parameterPath": relative_to_root(path),
+            },
+        )
+    except Exception as exc:
+        print("[clone_voice_workspace] Usage metering failed for voice parameter:", repr(exc), flush=True)
+
     return voice_id, path
 
 

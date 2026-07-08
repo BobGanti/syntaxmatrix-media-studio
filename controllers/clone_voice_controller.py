@@ -13,6 +13,30 @@ from services.clone_voice_audio_policy import (
 )
 from services.clone_voice_provider import create_voice_parameter, generate_narration_to_file
 from services.clone_voice_style import generate_narration_to_file_with_style
+from services.auth_context import auth_context_from_request
+from services.customer_workspace import workspace_selector_payload
+from services.billing_provider import (
+    BillingProviderError,
+    BillingWebhookNotReady,
+    billing_provider_status_payload,
+    process_dev_subscription_simulation,
+    process_provider_webhook,
+)
+from services.billing_usage import (
+    QuotaExceededError,
+    assert_workspace_can_spend,
+    audio_duration_seconds,
+    billing_plans_payload,
+    estimate_narration_credits_from_text,
+    get_workspace_subscription,
+    economics_summary,
+    pricing_config_payload,
+    quota_status,
+    record_usage_event,
+    set_workspace_plan,
+    update_pricing_config,
+    usage_summary,
+)
 from services.clone_voice_system import (
     SYSTEM_PREVIEWS_DIR,
     delete_system_voice,
@@ -51,6 +75,11 @@ def _error(message: str, status: int = 500):
     return jsonify({"ok": False, "message": message, "error": message}), status
 
 
+def _quota_error_response(exc: QuotaExceededError):
+    payload = getattr(exc, "payload", None) or {"message": str(exc)}
+    return jsonify({"ok": False, "error": payload.get("message"), **payload}), 402
+
+
 def _generate_and_normalize(voice_parameter: str, prompt: str, workspace, title: str, narration_speed="normal", narration_style="natural"):
     output_path = generated_audio_path(workspace, title)
 
@@ -65,6 +94,23 @@ def _generate_and_normalize(voice_parameter: str, prompt: str, workspace, title:
     apply_narration_speed_to_file(output_path, speed_info["key"])
 
     normalize_generated_audio_file(output_path)
+
+    duration_seconds = audio_duration_seconds(output_path)
+
+    record_usage_event(
+        workspace.workspace_id,
+        "narration.generated",
+        quantity=duration_seconds or 1,
+        metadata={
+            "title": title,
+            "outputPath": relative_to_root(output_path),
+            "durationSeconds": duration_seconds,
+            "speed": speed_info.get("key"),
+            "style": style_info.get("key"),
+            "styleApplied": style_info.get("styleApplied"),
+        },
+    )
+
     asset_url = workspace_generated_audio_url(workspace, output_path)
 
     return output_path, asset_url, speed_info, style_info
@@ -76,26 +122,178 @@ def _generate_standard_preview(voice_parameter: str, preview_path):
     normalize_generated_audio_file(preview_path)
 
 
-def _print_received_source(prompt: str, title: str, audio_file, source_mode: str) -> None:
-    print("\n" + "=" * 100, flush=True)
-    print("[clone_voice_controller] FROM SOURCE", flush=True)
-    print("sourceMode:", repr(source_mode), flush=True)
-    print("FORM KEYS:", list(request.form.keys()), flush=True)
-    print("FILE KEYS:", list(request.files.keys()), flush=True)
-    print("title:", repr(title), flush=True)
-    print("prompt_length:", len(prompt), flush=True)
+# def _print_received_source(prompt: str, title: str, audio_file, source_mode: str) -> None:
+#     print("\n" + "=" * 100, flush=True)
+#     print("[clone_voice_controller] FROM SOURCE", flush=True)
+#     print("sourceMode:", repr(source_mode), flush=True)
+#     print("FORM KEYS:", list(request.form.keys()), flush=True)
+#     print("FILE KEYS:", list(request.files.keys()), flush=True)
+#     print("title:", repr(title), flush=True)
+#     print("prompt_length:", len(prompt), flush=True)
 
-    if audio_file:
-        print("audio.filename:", repr(audio_file.filename), flush=True)
-        print("audio.mimetype:", repr(audio_file.mimetype), flush=True)
-        print("audio.content_type:", repr(audio_file.content_type), flush=True)
-    else:
-        print("audio: None", flush=True)
+#     if audio_file:
+#         print("audio.filename:", repr(audio_file.filename), flush=True)
+#         print("audio.mimetype:", repr(audio_file.mimetype), flush=True)
+#         print("audio.content_type:", repr(audio_file.content_type), flush=True)
+#     else:
+#         print("audio: None", flush=True)
 
-    print("=" * 100 + "\n", flush=True)
+#     print("=" * 100 + "\n", flush=True)
 
 
 def register_clone_voice_routes(app):
+
+    if "billing_plans" not in app.view_functions:
+        @app.get("/api/billing/plans", endpoint="billing_plans")
+        def billing_plans():
+            return jsonify({
+                "ok": True,
+                **billing_plans_payload(),
+            })
+
+    if "billing_usage_summary" not in app.view_functions:
+        @app.get("/api/billing/usage", endpoint="billing_usage_summary")
+        def billing_usage():
+            workspace_id = request.args.get("workspaceId", MOCK_WORKSPACE_ID)
+            month = request.args.get("month")
+
+            return jsonify({
+                "ok": True,
+                **usage_summary(workspace_id, month),
+            })
+
+
+
+
+    if "billing_pricing_config" not in app.view_functions:
+        @app.get("/api/billing/pricing-config", endpoint="billing_pricing_config")
+        def billing_pricing_config():
+            return jsonify({
+                "ok": True,
+                **pricing_config_payload(),
+            })
+
+    if "billing_pricing_config_update" not in app.view_functions:
+        @app.post("/api/billing/pricing-config", endpoint="billing_pricing_config_update")
+        def billing_pricing_config_update():
+            data = request.get_json(silent=True) or {}
+
+            try:
+                config = update_pricing_config(dict(data))
+
+                return jsonify({
+                    "ok": True,
+                    **config,
+                })
+
+            except Exception as exc:
+                return _error(str(exc), 400)
+
+    if "billing_economics" not in app.view_functions:
+        @app.get("/api/billing/economics", endpoint="billing_economics")
+        def billing_economics():
+            workspace_id = request.args.get("workspaceId", MOCK_WORKSPACE_ID)
+            month = request.args.get("month")
+
+            return jsonify({
+                "ok": True,
+                **economics_summary(workspace_id, month),
+            })
+
+    if "billing_provider_status" not in app.view_functions:
+        @app.get("/api/billing/provider/status", endpoint="billing_provider_status")
+        def billing_provider_status():
+            return jsonify({
+                "ok": True,
+                **billing_provider_status_payload(),
+            })
+
+    if "billing_dev_simulate_subscription" not in app.view_functions:
+        @app.post("/api/billing/dev/simulate-subscription", endpoint="billing_dev_simulate_subscription")
+        def billing_dev_simulate_subscription():
+            data = request.get_json(silent=True) or request.form
+
+            try:
+                result = process_dev_subscription_simulation(dict(data))
+                workspace_id = result["event"]["workspaceId"]
+
+                return jsonify({
+                    "ok": True,
+                    **result,
+                    "quota": quota_status(workspace_id),
+                })
+
+            except BillingProviderError as exc:
+                return _error(str(exc), 400)
+
+            except Exception as exc:
+                return _error(str(exc), 500)
+
+    if "billing_provider_webhook" not in app.view_functions:
+        @app.post("/api/billing/webhook/<provider>", endpoint="billing_provider_webhook")
+        def billing_provider_webhook(provider: str):
+            payload = request.get_json(silent=True) or {}
+
+            try:
+                result = process_provider_webhook(
+                    provider,
+                    payload,
+                    headers=dict(request.headers),
+                )
+                workspace_id = result["event"]["workspaceId"]
+
+                return jsonify({
+                    "ok": True,
+                    **result,
+                    "quota": quota_status(workspace_id),
+                })
+
+            except BillingWebhookNotReady as exc:
+                return _error(str(exc), 501)
+
+            except BillingProviderError as exc:
+                return _error(str(exc), 400)
+
+            except Exception as exc:
+                return _error(str(exc), 500)
+
+    if "billing_subscription_status" not in app.view_functions:
+        @app.get("/api/billing/subscription", endpoint="billing_subscription_status")
+        def billing_subscription_status():
+            workspace_id = request.args.get("workspaceId", MOCK_WORKSPACE_ID)
+
+            return jsonify({
+                "ok": True,
+                **quota_status(workspace_id),
+            })
+
+    if "billing_subscription_update" not in app.view_functions:
+        @app.post("/api/billing/subscription", endpoint="billing_subscription_update")
+        def billing_subscription_update():
+            data = request.get_json(silent=True) or request.form
+            workspace_id = data.get("workspaceId") or request.args.get("workspaceId") or MOCK_WORKSPACE_ID
+            plan_key = data.get("planKey") or data.get("plan") or "starter"
+            status = data.get("status") or "active"
+
+            try:
+                subscription = set_workspace_plan(
+                    workspace_id,
+                    plan_key,
+                    status=status,
+                    provider=data.get("provider") or "manual",
+                    customer_id=data.get("customerId") or "",
+                    subscription_id=data.get("subscriptionId") or "",
+                )
+
+                return jsonify({
+                    "ok": True,
+                    "subscription": subscription,
+                    **quota_status(workspace_id),
+                })
+
+            except Exception as exc:
+                return _error(str(exc), 400)
+
     if "clone_voice_settings" not in app.view_functions:
         @app.get("/api/clone-voice/settings", endpoint="clone_voice_settings")
         def clone_voice_settings():
@@ -131,12 +329,12 @@ def register_clone_voice_routes(app):
     if "clone_voice_workspaces" not in app.view_functions:
         @app.get("/api/clone-voice/workspaces", endpoint="clone_voice_workspaces")
         def clone_voice_workspaces():
-            workspaces = list_demo_workspaces()
+            ctx = auth_context_from_request(request)
+            payload = workspace_selector_payload(ctx.user_id, ctx.role, ctx.workspace_id)
 
             return jsonify({
                 "ok": True,
-                "defaultWorkspaceId": MOCK_WORKSPACE_ID,
-                "workspaces": workspaces,
+                **payload,
             })
 
     if "clone_voice_system_voices" not in app.view_functions:
@@ -296,6 +494,12 @@ def register_clone_voice_routes(app):
                 existing_parameter = voice_parameter_exists(workspace, voice_id)
                 parameter_created = False
                 preview_created = False
+
+                if is_recording or not existing_parameter:
+                    try:
+                        assert_workspace_can_spend(workspace.workspace_id, "voice.parameter.saved", quantity=1)
+                    except QuotaExceededError as exc:
+                        return _quota_error_response(exc)
 
                 if existing_parameter and not is_recording:
                     print("[clone_voice_controller] Uploaded voice already exists. Reusing parameter:", voice_id, flush=True)
@@ -463,6 +667,12 @@ def register_clone_voice_routes(app):
                 if gender not in {"M", "F"}:
                     return _error("Voice gender is required. Choose Male (M) or Female (F).", 400)
 
+                # replace voice source quota preflight
+                try:
+                    assert_workspace_can_spend(workspace.workspace_id, "voice.parameter.saved", quantity=1)
+                except QuotaExceededError as exc:
+                    return _quota_error_response(exc)
+
                 max_seconds = get_max_voice_source_seconds()
                 raw_source_path = save_source_audio(audio_file, workspace)
                 limited_source_path = source_limited_path(workspace, voice_id)
@@ -554,6 +764,17 @@ def register_clone_voice_routes(app):
                 voice_parameter, param_path = load_workspace_voice_parameter(workspace, voice_id)
                 metadata = load_voice_metadata(workspace, voice_id)
 
+                estimated_credits = estimate_narration_credits_from_text(prompt, narration_speed)
+
+                try:
+                    assert_workspace_can_spend(
+                        workspace.workspace_id,
+                        "narration.generated",
+                        estimated_credits=estimated_credits,
+                    )
+                except QuotaExceededError as exc:
+                    return _quota_error_response(exc)
+
                 output_path, asset_url, speed_info, style_info = _generate_and_normalize(voice_parameter, prompt, workspace, title, narration_speed, narration_style)
 
                 return jsonify({
@@ -607,6 +828,17 @@ def register_clone_voice_routes(app):
             try:
                 workspace = get_workspace(workspace_id)
                 voice_parameter, param_path = load_system_voice_parameter(voice_id)
+
+                estimated_credits = estimate_narration_credits_from_text(prompt, narration_speed)
+
+                try:
+                    assert_workspace_can_spend(
+                        workspace.workspace_id,
+                        "narration.generated",
+                        estimated_credits=estimated_credits,
+                    )
+                except QuotaExceededError as exc:
+                    return _quota_error_response(exc)
 
                 output_path, asset_url, speed_info, style_info = _generate_and_normalize(voice_parameter, prompt, workspace, title, narration_speed, narration_style)
 
