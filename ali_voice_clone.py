@@ -22,10 +22,12 @@ DEFAULT_TARGET_MODEL = "qwen3-tts-vc-2026-01-22"
 DEFAULT_PREFERRED_NAME = "smxVoice"
 DEFAULT_AUDIO_MIME_TYPE = "audio/mpeg"
 
-def create_voice(file_path: str,
-                 target_model: str = DEFAULT_TARGET_MODEL,
-                 preferred_name: str = DEFAULT_PREFERRED_NAME,
-                 audio_mime_type: str = DEFAULT_AUDIO_MIME_TYPE) -> str:
+def create_voice(
+        file_path: str,
+        target_model: str = DEFAULT_TARGET_MODEL,
+        preferred_name: str = DEFAULT_PREFERRED_NAME,
+        audio_mime_type: str = DEFAULT_AUDIO_MIME_TYPE
+) -> str:
     """
     Create a custom voice and return the voice parameter.
     """
@@ -36,7 +38,6 @@ def create_voice(file_path: str,
     base64_str = base64.b64encode(file_path_obj.read_bytes()).decode()
     data_uri = f"data:{audio_mime_type};base64,{base64_str}"
 
-    # FIXED: Replaced placeholder {WorkspaceId} with your actual workspace ID variable
     url = f"https://{WORKSPACE_ID}.ap-southeast-1.maas.aliyuncs.com/api/v1/services/audio/tts/customization"
     
     payload = {
