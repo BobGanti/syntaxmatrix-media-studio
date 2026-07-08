@@ -1381,6 +1381,100 @@ def syntaxmatrix_repository_wiring_status_guard():
     })
 
 
+
+
+# ---------------------------------------------------------------------
+# Hard guard for persistence migration readiness/status
+# ---------------------------------------------------------------------
+@app.before_request
+def syntaxmatrix_persistence_migration_status_guard():
+    from flask import jsonify, request
+
+    if request.path.rstrip("/") != "/api/admin/persistence/migration/status":
+        return None
+
+    if request.method.upper() != "GET":
+        return jsonify({
+            "ok": False,
+            "error": "Method not allowed.",
+            "endpoint": "/api/admin/persistence/migration/status",
+        }), 405
+
+    from services.auth_context import (
+        AuthError,
+        auth_context_from_request,
+        auth_error_payload,
+        require_admin,
+    )
+    from services.persistence_repository import get_persistence_repository, repository_smoke_test
+    from services.persistence_status import persistence_status_payload
+    from scripts.export_json_persistence_snapshot import build_snapshot
+
+    ctx = auth_context_from_request(request)
+
+    try:
+        require_admin(ctx)
+    except AuthError as exc:
+        return jsonify(auth_error_payload(exc)), exc.status_code
+
+    snapshot = build_snapshot()
+    repo = get_persistence_repository()
+
+    return jsonify({
+        "ok": True,
+        "backend": repo.backend_name,
+        "jsonSnapshotCounts": snapshot.get("counts", {}),
+        "persistence": persistence_status_payload(),
+        "repository": repository_smoke_test(),
+        "tools": {
+            "exportSnapshot": "python scripts/export_json_persistence_snapshot.py",
+            "dryRunMigration": "python scripts/migrate_json_to_postgres.py --dry-run",
+            "applyMigration": "python scripts/migrate_json_to_postgres.py --apply --init-schema",
+        },
+        "migrationApplied": False,
+    })
+
+
+
+
+# ---------------------------------------------------------------------
+# Hard guard for object storage status
+# ---------------------------------------------------------------------
+@app.before_request
+def syntaxmatrix_object_storage_status_guard():
+    from flask import jsonify, request
+
+    if request.path.rstrip("/") != "/api/admin/storage/status":
+        return None
+
+    if request.method.upper() != "GET":
+        return jsonify({
+            "ok": False,
+            "error": "Method not allowed.",
+            "endpoint": "/api/admin/storage/status",
+        }), 405
+
+    from services.auth_context import (
+        AuthError,
+        auth_context_from_request,
+        auth_error_payload,
+        require_admin,
+    )
+    from services.object_storage import object_storage_status_payload
+
+    ctx = auth_context_from_request(request)
+
+    try:
+        require_admin(ctx)
+    except AuthError as exc:
+        return jsonify(auth_error_payload(exc)), exc.status_code
+
+    return jsonify({
+        "ok": True,
+        **object_storage_status_payload(),
+    })
+
+
 if __name__ == "__main__":
     print("SyntaxMatrix Media Studio Flask")
     print(f"Open: http://{HOST}:{PORT}")

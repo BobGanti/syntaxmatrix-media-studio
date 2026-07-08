@@ -121,3 +121,6 @@ dist/
 *.egg-info/
 # Stripe Product/Price IDs are environment-specific.
 billing/stripe_price_map.json
+
+# Local object storage runtime files
+object_storage/
