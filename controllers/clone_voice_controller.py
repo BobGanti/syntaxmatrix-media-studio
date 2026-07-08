@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from flask import jsonify, request, send_from_directory
+from flask import Response, jsonify, request, send_from_directory
 
 from services.clone_voice_audio_policy import (
     get_max_voice_source_seconds,
@@ -69,6 +69,54 @@ from services.clone_voice_workspace import (
     workspace_generated_audio_url,
     workspace_voice_preview_url,
 )
+
+
+
+
+def _workspace_media_response_from_object_storage(workspace_id: str, category: str, filename: str):
+    import mimetypes
+
+    try:
+        from services.object_storage import (
+            get_object_storage,
+            object_key_for_generated_audio,
+            object_key_for_voice_preview,
+        )
+
+        if category == "generated_audio":
+            key = object_key_for_generated_audio(workspace_id, filename)
+        elif category == "voice_previews":
+            key = object_key_for_voice_preview(workspace_id, filename)
+        else:
+            return None
+
+        storage = get_object_storage()
+
+        if not storage.exists(key):
+            return None
+
+        data = storage.read_bytes(key)
+        mimetype = mimetypes.guess_type(filename)[0] or "audio/wav"
+
+        return Response(
+            data,
+            mimetype=mimetype,
+            headers={
+                "Cache-Control": "private, max-age=3600",
+                "X-SyntaxMatrix-Object-Storage": storage.backend_name,
+            },
+        )
+
+    except Exception as exc:
+        print(
+            "[clone_voice_controller] Object storage media read failed:",
+            workspace_id,
+            category,
+            filename,
+            repr(exc),
+            flush=True,
+        )
+        return None
 
 
 def _error(message: str, status: int = 500):
@@ -872,12 +920,30 @@ def register_clone_voice_routes(app):
         @app.get("/media/workspaces/<workspace_id>/generated_audio/<path:filename>", endpoint="clone_voice_workspace_audio")
         def workspace_audio(workspace_id: str, filename: str):
             workspace = get_workspace(workspace_id)
+            object_response = _workspace_media_response_from_object_storage(
+                workspace.workspace_id,
+                "generated_audio",
+                filename,
+            )
+
+            if object_response is not None:
+                return object_response
+
             return send_from_directory(workspace.generated_audio_dir, filename)
 
     if "clone_voice_workspace_preview" not in app.view_functions:
         @app.get("/media/workspaces/<workspace_id>/voice_previews/<path:filename>", endpoint="clone_voice_workspace_preview")
         def workspace_preview(workspace_id: str, filename: str):
             workspace = get_workspace(workspace_id)
+            object_response = _workspace_media_response_from_object_storage(
+                workspace.workspace_id,
+                "voice_previews",
+                filename,
+            )
+
+            if object_response is not None:
+                return object_response
+
             return send_from_directory(workspace.voice_previews_dir, filename)
 
     if "clone_voice_preview_audio" not in app.view_functions:

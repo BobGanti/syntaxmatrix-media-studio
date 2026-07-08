@@ -193,11 +193,79 @@ def generated_audio_path(paths: WorkspacePaths, title: str) -> pathlib.Path:
     return paths.generated_audio_dir / f"{title_slug}_{now_stamp()}.wav"
 
 
+
+
+# ---------------------------------------------------------------------
+# Object-storage media mirroring
+# ---------------------------------------------------------------------
+def _mirror_workspace_media_to_object_storage(paths: WorkspacePaths, category: str, media_path: pathlib.Path) -> dict[str, Any]:
+    """Mirror an already-created local workspace media file into configured object storage.
+
+    Local development remains safe because OBJECT_STORAGE_BACKEND defaults to local.
+    Production will use OBJECT_STORAGE_BACKEND=gcs and GCS_BUCKET_NAME.
+    """
+    media_path = pathlib.Path(media_path)
+
+    if not media_path.exists() or not media_path.is_file():
+        return {
+            "ok": False,
+            "reason": "local_file_missing",
+            "path": relative_to_root(media_path),
+        }
+
+    try:
+        from services.object_storage import (
+            get_object_storage,
+            object_key_for_generated_audio,
+            object_key_for_voice_preview,
+        )
+
+        if category == "generated_audio":
+            key = object_key_for_generated_audio(paths.workspace_id, media_path.name)
+        elif category == "voice_previews":
+            key = object_key_for_voice_preview(paths.workspace_id, media_path.name)
+        else:
+            return {
+                "ok": False,
+                "reason": "unsupported_category",
+                "category": category,
+            }
+
+        stored = get_object_storage().upload_file(
+            key,
+            media_path,
+            content_type="audio/wav",
+        )
+
+        return {
+            "ok": True,
+            **stored.to_payload(),
+        }
+
+    except Exception as exc:
+        print(
+            "[clone_voice_workspace] Object storage mirror failed:",
+            category,
+            media_path,
+            repr(exc),
+            flush=True,
+        )
+
+        return {
+            "ok": False,
+            "reason": "mirror_failed",
+            "error": str(exc),
+            "path": relative_to_root(media_path),
+        }
+
+
 def workspace_generated_audio_url(paths: WorkspacePaths, output_path: pathlib.Path) -> str:
+    _mirror_workspace_media_to_object_storage(paths, "generated_audio", output_path)
     return f"/media/workspaces/{paths.workspace_id}/generated_audio/{output_path.name}"
 
 
 def workspace_voice_preview_url(paths: WorkspacePaths, preview_path: pathlib.Path) -> str:
+    _mirror_workspace_media_to_object_storage(paths, "voice_previews", preview_path)
     return f"/media/workspaces/{paths.workspace_id}/voice_previews/{preview_path.name}"
 
 
