@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 
-from services.customer_workspace import user_has_workspace_access
+from services.customer_workspace import user_has_workspace_access, user_workspace_memberships
 
 
 ADMIN_ROLES = {"admin", "owner"}
-CLIENT_ROLES = {"client", "admin", "owner"}
+CLIENT_ROLES = {"client", "member", "admin", "owner"}
+FIREBASE_AUTH_PROVIDERS = {"firebase", "identity_platform", "google_identity_platform"}
 
 
 class AuthError(PermissionError):
@@ -25,10 +27,12 @@ class AuthContext:
     workspace_id: str
     auth_mode: str
     is_admin: bool
+    email: str = ""
 
     def to_payload(self) -> dict[str, Any]:
         return {
             "userId": self.user_id,
+            "email": self.email,
             "role": self.role,
             "workspaceId": self.workspace_id,
             "authMode": self.auth_mode,
@@ -47,56 +51,176 @@ def _normalise_role(value: Any) -> str:
     if role in {"administrator", "superadmin", "super_admin"}:
         return "admin"
 
-    if role not in {"admin", "owner", "client"}:
+    if role not in {"admin", "owner", "client", "member"}:
         return "client"
 
     return role
 
 
+def auth_provider() -> str:
+    return _clean(os.getenv("AUTH_PROVIDER")).lower()
+
+
+def firebase_auth_enabled() -> bool:
+    return auth_provider() in FIREBASE_AUTH_PROVIDERS
+
+
 def dev_auth_enabled() -> bool:
+    if firebase_auth_enabled():
+        return False
+
     value = _clean(os.getenv("DEV_AUTH_ENABLED"), "true").lower()
     return value in {"1", "true", "yes", "on"}
 
 
-def auth_context_from_request(request) -> AuthContext:
-    """Return the current auth context.
+def _json_body_from_request(request) -> dict[str, Any]:
+    if getattr(request, "method", "GET") not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return {}
 
-    This is a development-safe boundary. In production, real login/session/JWT
-    middleware can replace this function while the rest of the app continues to
-    call require_admin() and require_workspace_access().
-    """
-    auth_mode = "dev" if dev_auth_enabled() else "disabled"
+    try:
+        json_body = request.get_json(silent=True)
+    except Exception:
+        json_body = None
 
-    # Local development priority:
-    # 1. headers, useful for API tests
-    # 2. query/form/json, useful for quick manual tests
-    # 3. environment variables
-    json_body = request.get_json(silent=True) if request.method in {"POST", "PUT", "PATCH", "DELETE"} else None
-    if not isinstance(json_body, dict):
-        json_body = {}
+    return json_body if isinstance(json_body, dict) else {}
+
+
+def _env_email_set(name: str) -> set[str]:
+    raw = _clean(os.getenv(name))
+    if not raw:
+        return set()
+
+    return {
+        part.strip().lower()
+        for part in re.split(r"[,;\s]+", raw)
+        if part.strip()
+    }
+
+
+def _firebase_admin_emails() -> set[str]:
+    return _env_email_set("FIREBASE_ADMIN_EMAILS")
+
+
+def _extract_bearer_token(request) -> str:
+    header = _clean(getattr(request, "headers", {}).get("Authorization"))
+    if not header:
+        return ""
+
+    parts = header.split(None, 1)
+    if len(parts) != 2:
+        return ""
+
+    scheme, token = parts
+    if scheme.lower() != "bearer":
+        return ""
+
+    return _clean(token)
+
+
+def _request_workspace_id(request, json_body: dict[str, Any], fallback: str = "") -> str:
+    return _clean(
+        getattr(request, "headers", {}).get("X-Workspace-Id")
+        or getattr(request, "args", {}).get("workspaceId")
+        or getattr(request, "form", {}).get("workspaceId")
+        or json_body.get("workspaceId")
+        or fallback
+    )
+
+
+def _first_membership_workspace(user_id: str) -> str:
+    for membership in user_workspace_memberships(user_id):
+        workspace_id = _clean(membership.get("workspaceId"))
+        if workspace_id:
+            return workspace_id
+    return ""
+
+
+def _auth_context_from_firebase_request(request, json_body: dict[str, Any]) -> AuthContext:
+    token = _extract_bearer_token(request)
+
+    if not token:
+        raise AuthError(
+            "Authentication required.",
+            status_code=401,
+            payload={
+                "authMode": "firebase",
+                "reason": "missing_bearer_token",
+            },
+        )
+
+    try:
+        from services.firebase_auth import verify_firebase_id_token
+
+        decoded = verify_firebase_id_token(token)
+    except Exception as exc:
+        raise AuthError(
+            "Invalid or expired authentication token.",
+            status_code=401,
+            payload={
+                "authMode": "firebase",
+                "reason": exc.__class__.__name__,
+            },
+        ) from exc
+
+    user_id = _clean(decoded.get("uid"))
+    if not user_id:
+        raise AuthError(
+            "Invalid authentication token.",
+            status_code=401,
+            payload={
+                "authMode": "firebase",
+                "reason": "missing_uid",
+            },
+        )
+
+    email = _clean(decoded.get("email")).lower()
+    role = "admin" if email and email in _firebase_admin_emails() else "client"
+
+    requested_workspace = _request_workspace_id(request, json_body, "")
+    default_workspace = _first_membership_workspace(user_id)
+
+    if role in ADMIN_ROLES:
+        workspace_id = requested_workspace or default_workspace
+    elif requested_workspace and user_has_workspace_access(user_id, requested_workspace):
+        workspace_id = requested_workspace
+    else:
+        workspace_id = default_workspace
+
+    return AuthContext(
+        user_id=user_id,
+        email=email,
+        role=role,
+        workspace_id=workspace_id,
+        auth_mode="firebase",
+        is_admin=role in ADMIN_ROLES,
+    )
+
+
+def _auth_context_from_dev_request(request, json_body: dict[str, Any]) -> AuthContext:
+    auth_mode = "dev"
 
     role = (
-        request.headers.get("X-Dev-Role")
-        or request.args.get("devRole")
-        or request.form.get("devRole")
+        getattr(request, "headers", {}).get("X-Dev-Role")
+        or getattr(request, "args", {}).get("devRole")
+        or getattr(request, "form", {}).get("devRole")
         or json_body.get("devRole")
         or os.getenv("DEV_AUTH_ROLE")
         or "admin"
     )
 
     workspace_id = (
-        request.headers.get("X-Workspace-Id")
-        or request.args.get("workspaceId")
-        or request.form.get("workspaceId")
+        getattr(request, "headers", {}).get("X-Workspace-Id")
+        or getattr(request, "args", {}).get("workspaceId")
+        or getattr(request, "form", {}).get("workspaceId")
         or json_body.get("workspaceId")
         or os.getenv("DEV_AUTH_WORKSPACE_ID")
         or "mock_user_001"
     )
 
     user_id = (
-        request.headers.get("X-User-Id")
-        or request.args.get("userId")
-        or request.form.get("userId")
+        getattr(request, "headers", {}).get("X-User-Id")
+        or getattr(request, "args", {}).get("userId")
+        or getattr(request, "form", {}).get("userId")
         or json_body.get("userId")
         or os.getenv("DEV_AUTH_USER_ID")
         or "dev_admin"
@@ -115,6 +239,36 @@ def auth_context_from_request(request) -> AuthContext:
     )
 
 
+def auth_context_from_request(request) -> AuthContext:
+    """Return the current auth context.
+
+    Firebase mode:
+      AUTH_PROVIDER=firebase
+      Requires: Authorization: Bearer <Firebase ID token>
+
+    Local dev mode:
+      AUTH_PROVIDER unset
+      DEV_AUTH_ENABLED=true
+      Allows X-Dev-* headers / env var fallback for manual testing.
+    """
+    json_body = _json_body_from_request(request)
+
+    if firebase_auth_enabled():
+        return _auth_context_from_firebase_request(request, json_body)
+
+    if not dev_auth_enabled():
+        raise AuthError(
+            "Authentication is disabled.",
+            status_code=401,
+            payload={
+                "authMode": "disabled",
+                "reason": "no_auth_provider",
+            },
+        )
+
+    return _auth_context_from_dev_request(request, json_body)
+
+
 def require_admin(ctx: AuthContext) -> None:
     if ctx.role not in ADMIN_ROLES:
         raise AuthError(
@@ -124,12 +278,25 @@ def require_admin(ctx: AuthContext) -> None:
                 "requiredRole": "admin",
                 "currentRole": ctx.role,
                 "workspaceId": ctx.workspace_id,
+                "authMode": ctx.auth_mode,
             },
         )
 
 
 def require_workspace_access(ctx: AuthContext, workspace_id: str | None) -> None:
     requested_workspace = _clean(workspace_id, ctx.workspace_id)
+
+    if not requested_workspace:
+        raise AuthError(
+            "Workspace is required.",
+            status_code=403,
+            payload={
+                "currentWorkspaceId": ctx.workspace_id,
+                "requestedWorkspaceId": requested_workspace,
+                "userId": ctx.user_id,
+                "authMode": ctx.auth_mode,
+            },
+        )
 
     if ctx.role in ADMIN_ROLES:
         return
@@ -143,15 +310,15 @@ def require_workspace_access(ctx: AuthContext, workspace_id: str | None) -> None
                 "currentRole": ctx.role,
                 "workspaceId": ctx.workspace_id,
                 "requestedWorkspaceId": requested_workspace,
+                "authMode": ctx.auth_mode,
             },
         )
 
-    # Real foundation: membership grants access.
     if user_has_workspace_access(ctx.user_id, requested_workspace):
         return
 
-    # Local dev fallback: allow the workspace declared in DEV_AUTH_WORKSPACE_ID.
-    if requested_workspace == ctx.workspace_id:
+    # Dev-only convenience. Firebase mode must never fall back to a declared workspace.
+    if ctx.auth_mode == "dev" and requested_workspace == ctx.workspace_id:
         return
 
     raise AuthError(
@@ -161,6 +328,7 @@ def require_workspace_access(ctx: AuthContext, workspace_id: str | None) -> None
             "currentWorkspaceId": ctx.workspace_id,
             "requestedWorkspaceId": requested_workspace,
             "userId": ctx.user_id,
+            "authMode": ctx.auth_mode,
         },
     )
 

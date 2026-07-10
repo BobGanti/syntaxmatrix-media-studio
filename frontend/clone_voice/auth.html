@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Sign in | SyntaxMatrix Media Studio</title>
+  <link rel="stylesheet" href="/auth.css" />
+</head>
+<body>
+  <main class="auth-shell">
+    <section class="auth-card">
+      <div class="brand-block">
+        <div class="brand-mark">SMX</div>
+        <div>
+          <p class="eyebrow">SyntaxMatrix</p>
+          <h1>Media Studio</h1>
+        </div>
+      </div>
+
+      <p class="lead">
+        Sign in or create your account to access your private workspace.
+      </p>
+
+      <div id="authStatus" class="status info">Loading authentication...</div>
+
+      <form id="authForm" class="auth-form" autocomplete="on">
+        <label>
+          Email
+          <input id="email" name="email" type="email" autocomplete="email" required />
+        </label>
+
+        <label>
+          Password
+          <input id="password" name="password" type="password" autocomplete="current-password" minlength="6" required />
+        </label>
+
+        <div class="button-row">
+          <button id="signInButton" type="submit">Sign in</button>
+          <button id="registerButton" type="button" class="secondary">Create account</button>
+        </div>
+      </form>
+
+      <p class="fine-print">
+        Registration uses Firebase Authentication. Your app workspace will be created in the next onboarding stage.
+      </p>
+    </section>
+  </main>
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-auth-compat.js"></script>
+  <script src="/auth.js"></script>
+</body>
+</html>

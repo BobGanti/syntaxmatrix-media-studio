@@ -38,6 +38,7 @@ def create_voice(
     base64_str = base64.b64encode(file_path_obj.read_bytes()).decode()
     data_uri = f"data:{audio_mime_type};base64,{base64_str}"
 
+
     url = f"https://{WORKSPACE_ID}.ap-southeast-1.maas.aliyuncs.com/api/v1/services/audio/tts/customization"
     
     payload = {
@@ -64,7 +65,13 @@ def create_voice(
         raise RuntimeError(f"Failed to parse voice response: {e}")
 
 
-def clone_voice(api_key: str, model: str, voice: str, text: str, stream: bool=False):
+def clone_voice(
+        api_key: str, 
+        model: str, 
+        voice: str, 
+        text: str, 
+        stream: bool=False
+    ):
     print("Generating speech response...")
     response = dashscope.MultiModalConversation.call(
         api_key=api_key,
@@ -98,18 +105,21 @@ def read_text_from_file(file_path: str) -> str:
         raise FileNotFoundError(f"Text file not found: {file_path}")
     return path_obj.read_text(encoding="utf-8").strip()
 
-
-def preview(filename:str):
+def preview(filename:str, preview_text:str = None) -> str:
     vname = filename.split("_")[0]
-    text = f"{vname}: {read_text_from_file('smxPPprev.txt')}"
+    text = f"{read_text_from_file(preview_text)}" 
     return text
 
-
-MODE = None  # preview or None
+def build_narration_title(narration_fname: str) -> str:
+    """Builds a title for the narration based on the filename."""
+    # base_name = pathlib.Path(narration_fname).stem
+    # return base_name.replace(" ", "_").lower()
+    title = narration_fname.split("/")[1].split(".")[0] if narration_fname.__contains__("/") else narration_fname.split(".")[0]
+    return title
 
 if __name__ == '__main__':
     dashscope.base_http_api_url = f'https://{WORKSPACE_ID}.ap-southeast-1.maas.aliyuncs.com/api/v1'
-
+    
     ROOT_DIR = "voices"
     os.makedirs("voices", exist_ok=True)
     SOURCES_DIR = "sources"
@@ -121,7 +131,7 @@ if __name__ == '__main__':
     CLONES_DIR = "clones"
     os.makedirs(f"{ROOT_DIR}/{CLONES_DIR}", exist_ok=True)
 
-    SOURCE_VOICE_FILE_NAME = "smxPP_M.wav"
+    SOURCE_VOICE_FILE_NAME = "smxVoice.wav"  ###xxxxxxxxxxxx######
     SOURCE_VOICE_FILE_PATH = os.path.join(ROOT_DIR, SOURCES_DIR, SOURCE_VOICE_FILE_NAME) 
 
     CLONED_DATA_FILE_NAME = SOURCE_VOICE_FILE_NAME.replace(".", "_")
@@ -129,7 +139,7 @@ if __name__ == '__main__':
 
     PREVIEW_FILE_PATH = os.path.join(ROOT_DIR, CLONES_DIR, "preview_" + SOURCE_VOICE_FILE_NAME)
     
-     # Check if we already have a saved voice on disk
+    # Check if we already have a saved voice on disk
     if pathlib.Path(CLONED_DATA_FILE_PATH).exists():
         print("Loading existing voice from disk...")
         cloned_voice_parameter = load_voice_from_disk(CLONED_DATA_FILE_PATH)
@@ -140,14 +150,19 @@ if __name__ == '__main__':
         # 2. Save it to disk for next time
         save_voice_to_disk(cloned_voice_parameter, CLONED_DATA_FILE_PATH)
 
-
-    fname = "txt_sources\yt131.txt"
-    ctx = read_text_from_file(fname)
+    preview_fname = "txt_sources/thank_u.txt"  ###########
+    preview_text = read_text_from_file('txt_sources/thank_u.txt')   #####
+    
+    narration_fname = "txt_sources/thank_u.txt" ###########
+    narration_text = read_text_from_file('txt_sources/thank_u.txt') #####
+    
+    
     NARRATION_TEXT = {
-        "title": fname.split(".")[0], 
-        "content": ctx
+        "title": "TERRA", # build_narration_title(narration_fname),
+        "content": narration_text
     }
 
+    MODE = None  # preview or None    ############
     if MODE == preview:
         output_filename = f"{CLONED_DATA_FILE_NAME}_preview.wav"
         output_file_path = os.path.join(ROOT_DIR, PREVIEWS_DIR, output_filename)
@@ -167,7 +182,12 @@ if __name__ == '__main__':
     
     # ======= FIXED: EXTRACT AND SAVE THE AUDIO OUTPUT =======
     try:
-        response = clone_voice(api_key=ALIBABA_API_KEY, model=DEFAULT_TARGET_MODEL, voice=cloned_voice_parameter, text=text)
+        response = clone_voice(
+            api_key=ALIBABA_API_KEY, 
+            model=DEFAULT_TARGET_MODEL, 
+            voice=cloned_voice_parameter, 
+            text=text
+        )
 
         output_data = response.get("output", {})
         audio_info = output_data.get("audio", {})

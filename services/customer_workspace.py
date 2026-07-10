@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import json
+import os
 import pathlib
+import re
 from typing import Any
 
 
@@ -202,21 +205,33 @@ def workspace_label(workspace_id: str) -> str:
     return workspace_id
 
 
+def _auth_provider() -> str:
+    return _clean(os.getenv("AUTH_PROVIDER")).lower()
+
+
+def _firebase_auth_mode() -> bool:
+    return _auth_provider() in {"firebase", "identity_platform", "google_identity_platform"}
+
+
+def _workspace_payload_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "workspaceId": row.get("workspaceId"),
+        "label": row.get("label") or row.get("workspaceId"),
+        "customerId": row.get("customerId"),
+        "status": row.get("status", "active"),
+    }
+
+
 def visible_workspaces_for_user(user_id: str, role: str, fallback_workspace_id: str = "mock_user_001") -> list[dict[str, Any]]:
     role = _clean(role, "client").lower()
     user_id = _clean(user_id)
-    fallback_workspace_id = _clean(fallback_workspace_id, "mock_user_001")
+    fallback_workspace_id = _clean(fallback_workspace_id)
 
     workspaces = list_workspaces()
 
     if role in {"admin", "owner"}:
         return [
-            {
-                "workspaceId": row.get("workspaceId"),
-                "label": row.get("label") or row.get("workspaceId"),
-                "customerId": row.get("customerId"),
-                "status": row.get("status", "active"),
-            }
+            _workspace_payload_row(row)
             for row in workspaces
             if row.get("status", "active") == "active"
         ]
@@ -224,18 +239,15 @@ def visible_workspaces_for_user(user_id: str, role: str, fallback_workspace_id: 
     allowed_ids = {
         membership.get("workspaceId")
         for membership in user_workspace_memberships(user_id)
+        if membership.get("workspaceId")
     }
 
-    if not allowed_ids and fallback_workspace_id:
+    # Local development fallback only. Firebase/production users must have explicit membership.
+    if not allowed_ids and fallback_workspace_id and not _firebase_auth_mode():
         allowed_ids.add(fallback_workspace_id)
 
     return [
-        {
-            "workspaceId": row.get("workspaceId"),
-            "label": row.get("label") or row.get("workspaceId"),
-            "customerId": row.get("customerId"),
-            "status": row.get("status", "active"),
-        }
+        _workspace_payload_row(row)
         for row in workspaces
         if row.get("workspaceId") in allowed_ids and row.get("status", "active") == "active"
     ]
@@ -244,15 +256,20 @@ def visible_workspaces_for_user(user_id: str, role: str, fallback_workspace_id: 
 def workspace_selector_payload(user_id: str, role: str, fallback_workspace_id: str = "mock_user_001") -> dict[str, Any]:
     rows = visible_workspaces_for_user(user_id, role, fallback_workspace_id)
 
-    default_workspace_id = fallback_workspace_id
+    fallback_allowed = not _firebase_auth_mode()
+    default_workspace_id = _clean(fallback_workspace_id, "mock_user_001") if fallback_allowed else ""
 
     if rows and default_workspace_id not in {row["workspaceId"] for row in rows}:
         default_workspace_id = rows[0]["workspaceId"]
+
+    if not rows and not fallback_allowed:
+        default_workspace_id = ""
 
     return {
         "defaultWorkspaceId": default_workspace_id,
         "workspaces": rows,
     }
+
 
 
 def create_customer(
@@ -367,3 +384,235 @@ def add_workspace_membership(
     _write_list(MEMBERSHIPS_PATH, memberships)
 
     return membership
+
+# === STAGE9F3_FIREBASE_ONBOARDING_START ===
+
+def _stage9f3_hash(value: str, length: int = 12) -> str:
+    value = _clean(value)
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
+
+
+def _stage9f3_slug(value: str, fallback: str = "user") -> str:
+    text = _clean(value, fallback).lower()
+    text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+    return text[:42] or fallback
+
+
+def _stage9f3_find_customer(customer_id: str) -> dict[str, Any] | None:
+    customer_id = _clean(customer_id)
+    for customer in list_customers():
+        if customer.get("customerId") == customer_id:
+            return customer
+    return None
+
+
+def _stage9f3_find_workspace(workspace_id: str) -> dict[str, Any] | None:
+    workspace_id = _clean(workspace_id)
+    for workspace in list_workspaces():
+        if workspace.get("workspaceId") == workspace_id:
+            return workspace
+    return None
+
+
+def _stage9f3_membership_exists(user_id: str, workspace_id: str) -> bool:
+    user_id = _clean(user_id)
+    workspace_id = _clean(workspace_id)
+    return any(
+        row.get("userId") == user_id
+        and row.get("workspaceId") == workspace_id
+        and row.get("status", "active") == "active"
+        for row in list_memberships()
+    )
+
+
+def _stage9f3_add_membership_if_missing(user_id: str, workspace_id: str, role: str = "owner") -> dict[str, Any]:
+    user_id = _clean(user_id)
+    workspace_id = _clean(workspace_id)
+    role = _clean(role, "owner")
+
+    memberships = list_memberships()
+
+    for row in memberships:
+        if row.get("userId") == user_id and row.get("workspaceId") == workspace_id:
+            if row.get("status") != "active":
+                row["status"] = "active"
+                row["role"] = role
+                _write_list(MEMBERSHIPS_PATH, memberships)
+            return row
+
+    membership = {
+        "userId": user_id,
+        "workspaceId": workspace_id,
+        "role": role,
+        "status": "active",
+        "createdAt": _now(),
+        "source": "firebase",
+    }
+
+    memberships.append(membership)
+    _write_list(MEMBERSHIPS_PATH, memberships)
+    return membership
+
+
+def bootstrap_firebase_user_workspace(
+    *,
+    user_id: str,
+    email: str = "",
+    display_name: str = "",
+) -> dict[str, Any]:
+    """Create a private customer/workspace/membership for a Firebase user.
+
+    Idempotent:
+      - Same Firebase UID always maps to the same customer/workspace IDs.
+      - Existing active membership is reused.
+      - No mock workspace fallback is used.
+    """
+    user_id = _clean(user_id)
+    email = _clean(email).lower()
+    display_name = _clean(display_name)
+
+    if not user_id:
+        raise ValueError("user_id is required")
+
+    existing_memberships = user_workspace_memberships(user_id)
+    for membership in existing_memberships:
+        workspace = get_workspace_record(membership.get("workspaceId"))
+        if workspace and workspace.get("status", "active") == "active":
+            customer = get_customer_record(workspace.get("customerId"))
+            _stage9h1_seed_default_subscription_for_workspace(workspace.get("workspaceId"), user_id)
+
+            return {
+                "created": False,
+                "userId": user_id,
+                "email": email,
+                "customer": customer,
+                "workspace": workspace,
+                "membership": membership,
+            }
+
+    stable = _stage9f3_hash(user_id)
+    customer_id = f"cust_fb_{stable}"
+    workspace_id = f"ws_fb_{stable}"
+
+    customer = _stage9f3_find_customer(customer_id)
+    if not customer:
+        customers = list_customers()
+        readable_name = display_name or email.split("@")[0] if email else "New Customer"
+        customer = {
+            "customerId": customer_id,
+            "name": readable_name,
+            "billingEmail": email,
+            "status": "active",
+            "createdAt": _now(),
+            "source": "firebase",
+            "ownerUserId": user_id,
+        }
+        customers.append(customer)
+        _write_list(CUSTOMERS_PATH, customers)
+
+    workspace = _stage9f3_find_workspace(workspace_id)
+    if not workspace:
+        workspaces = list_workspaces()
+        label_root = display_name or email.split("@")[0] if email else "My"
+        workspace = {
+            "workspaceId": workspace_id,
+            "customerId": customer_id,
+            "label": f"{label_root} Workspace",
+            "status": "active",
+            "subscriptionOwnerUserId": user_id,
+            "createdAt": _now(),
+            "source": "firebase",
+        }
+        workspaces.append(workspace)
+        _write_list(WORKSPACES_PATH, workspaces)
+
+    membership = _stage9f3_add_membership_if_missing(user_id, workspace_id, "owner")
+
+    _stage9h1_seed_default_subscription_for_workspace(workspace_id, user_id)
+
+    return {
+        "created": True,
+        "userId": user_id,
+        "email": email,
+        "customer": customer,
+        "workspace": workspace,
+        "membership": membership,
+    }
+
+# === STAGE9F3_FIREBASE_ONBOARDING_END ===
+
+
+# === STAGE9H1_FIREBASE_DEFAULT_SUBSCRIPTION_START ===
+
+def _stage9h1_seed_default_subscription_for_workspace(workspace_id: str, user_id: str = "") -> None:
+    """Best-effort private-beta starter entitlement for Firebase workspaces.
+
+    Uses services.billing_usage, which is the billing module currently used by
+    billing_provider.py and /api/billing/entitlement.
+    """
+    workspace_id = _clean(workspace_id)
+    user_id = _clean(user_id)
+
+    if not workspace_id:
+        return
+
+    try:
+        from services.billing_usage import get_workspace_subscription, set_workspace_plan
+    except Exception as exc:
+        print("[stage9h1d] Could not import billing_usage helpers:", repr(exc), flush=True)
+        return
+
+    try:
+        existing = get_workspace_subscription(workspace_id)
+        status = _clean(existing.get("status")).lower() if isinstance(existing, dict) else ""
+        plan_key = _clean(
+            existing.get("planKey") if isinstance(existing, dict) else "",
+            _clean(existing.get("plan") if isinstance(existing, dict) else "", "")
+        ).lower()
+
+        if status in {"active", "trialing"} and plan_key:
+            return
+    except Exception:
+        pass
+
+    attempts = [
+        lambda: set_workspace_plan(
+            workspace_id=workspace_id,
+            plan_key="starter",
+            status="active",
+            provider="private_beta",
+            subscription_id=f"private_beta_{workspace_id}",
+        ),
+        lambda: set_workspace_plan(
+            workspace_id=workspace_id,
+            plan_key="starter",
+            status="active",
+            provider="private_beta",
+        ),
+        lambda: set_workspace_plan(
+            workspace_id=workspace_id,
+            plan_key="starter",
+            status="active",
+        ),
+        lambda: set_workspace_plan(workspace_id, "starter", "active"),
+        lambda: set_workspace_plan(workspace_id, "starter"),
+    ]
+
+    last_error = None
+
+    for attempt in attempts:
+        try:
+            attempt()
+            print("[stage9h1d] Seeded starter entitlement for", workspace_id, flush=True)
+            return
+        except TypeError as exc:
+            last_error = exc
+            continue
+        except Exception as exc:
+            last_error = exc
+            break
+
+    print("[stage9h1d] Could not seed starter entitlement:", repr(last_error), flush=True)
+
+# === STAGE9H1_FIREBASE_DEFAULT_SUBSCRIPTION_END ===
+

@@ -1722,6 +1722,503 @@ if "syntaxmatrix_storage_backfill_wsgi_guard_installed" not in globals():
     app.wsgi_app = _syntaxmatrix_storage_backfill_wsgi_guard
 
 
+# === STAGE9F2_FIREBASE_FRONTEND_AUTH_START ===
+# Firebase browser auth routes. These are public because users must load the
+# login/register page before they have an ID token.
+if "stage9f2_auth_page" not in app.view_functions:
+    @app.get("/auth", endpoint="stage9f2_auth_page")
+    @app.get("/auth/", endpoint="stage9f2_auth_page_slash")
+    def stage9f2_auth_page():
+        from pathlib import Path
+        from flask import send_from_directory
+
+        frontend_dir = Path(__file__).resolve().parent / "frontend" / "clone_voice"
+        return send_from_directory(frontend_dir, "auth.html")
+
+
+if "stage9f2_auth_asset" not in app.view_functions:
+    @app.get("/<path:asset_name>", endpoint="stage9f2_auth_asset")
+    def stage9f2_auth_asset(asset_name: str):
+        from pathlib import Path
+        from flask import abort, send_from_directory
+
+        allowed = {
+            "auth.css",
+            "auth.js",
+            "auth_bootstrap.js",
+        }
+
+        if asset_name not in allowed:
+            abort(404)
+
+        frontend_dir = Path(__file__).resolve().parent / "frontend" / "clone_voice"
+        return send_from_directory(frontend_dir, asset_name)
+
+
+if "stage9f2_firebase_config" not in app.view_functions:
+    @app.get("/api/auth/firebase-config", endpoint="stage9f2_firebase_config")
+    def stage9f2_firebase_config():
+        import os
+        from flask import jsonify
+
+        def clean(name: str) -> str:
+            return str(os.getenv(name) or "").strip()
+
+        firebase_config = {
+            "apiKey": clean("FIREBASE_API_KEY"),
+            "authDomain": clean("FIREBASE_AUTH_DOMAIN"),
+            "projectId": clean("FIREBASE_PROJECT_ID"),
+            "appId": clean("FIREBASE_APP_ID"),
+        }
+
+        optional_values = {
+            "storageBucket": clean("FIREBASE_STORAGE_BUCKET"),
+            "messagingSenderId": clean("FIREBASE_MESSAGING_SENDER_ID"),
+        }
+
+        for key, value in optional_values.items():
+            if value:
+                firebase_config[key] = value
+
+        missing = [
+            key
+            for key, value in firebase_config.items()
+            if key in {"apiKey", "authDomain", "projectId", "appId"} and not value
+        ]
+
+        if missing:
+            return jsonify({
+                "ok": False,
+                "error": "Firebase browser configuration is incomplete.",
+                "message": "Firebase browser configuration is incomplete.",
+                "missing": missing,
+            }), 500
+
+        return jsonify({
+            "ok": True,
+            "authProvider": clean("AUTH_PROVIDER") or "dev",
+            "firebaseConfig": firebase_config,
+        })
+# === STAGE9F2_FIREBASE_FRONTEND_AUTH_END ===
+
+
+
+
+# === STAGE9F3_ACCOUNT_ONBOARDING_TENANT_GATE_START ===
+
+def _stage9f3_auth_provider() -> str:
+    import os
+    return str(os.getenv("AUTH_PROVIDER") or "").strip().lower()
+
+
+def _stage9f3_firebase_mode() -> bool:
+    return _stage9f3_auth_provider() in {"firebase", "identity_platform", "google_identity_platform"}
+
+
+def _stage9f3_json_response(payload: dict, status: int = 200):
+    from flask import jsonify
+    return jsonify(payload), status
+
+
+def _stage9f3_request_workspace_id():
+    from flask import request
+
+    value = (
+        request.args.get("workspaceId")
+        or request.args.get("workspace_id")
+        or request.form.get("workspaceId")
+        or request.form.get("workspace_id")
+    )
+
+    if value:
+        return str(value).strip()
+
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        data = request.get_json(silent=True)
+        if isinstance(data, dict):
+            return str(
+                data.get("workspaceId")
+                or data.get("workspace_id")
+                or ""
+            ).strip()
+
+    return ""
+
+
+def _stage9f3_workspace_id_required_path(path: str) -> bool:
+    exact = {
+        "/api/clone-voice/my-voices",
+        "/api/clone-voice/voices/from-source",
+        "/api/clone-voice/from-saved",
+        "/api/clone-voice/from-system",
+        "/api/billing/usage",
+        "/api/billing/subscription",
+        "/api/billing/economics",
+        "/api/billing/checkout/stripe",
+        "/api/billing/portal/stripe",
+        "/api/billing/portal/stripe/status",
+    }
+
+    prefixes = (
+        "/api/clone-voice/my-voices/",
+    )
+
+    return path in exact or any(path.startswith(prefix) for prefix in prefixes)
+
+
+def _stage9f3_public_path(path: str) -> bool:
+    if path in {
+        "/auth",
+        "/auth/",
+        "/auth.css",
+        "/auth.js",
+        "/auth_bootstrap.js",
+        "/api/auth/firebase-config",
+    }:
+        return True
+
+    if path.startswith("/api/billing/webhook/"):
+        return True
+
+    if path.startswith("/static/"):
+        return True
+
+    return False
+
+
+if "stage9f3_account_bootstrap" not in app.view_functions:
+    @app.post("/api/account/bootstrap", endpoint="stage9f3_account_bootstrap")
+    @app.get("/api/account/bootstrap", endpoint="stage9f3_account_bootstrap_get")
+    def stage9f3_account_bootstrap():
+        from flask import jsonify, request
+
+        from services.auth_context import AuthError, auth_context_from_request, auth_error_payload
+        from services.customer_workspace import bootstrap_firebase_user_workspace, workspace_selector_payload
+
+        try:
+            ctx = auth_context_from_request(request)
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+
+        if ctx.auth_mode != "firebase":
+            return jsonify({
+                "ok": False,
+                "error": "Firebase authentication is required for account bootstrap.",
+                "message": "Firebase authentication is required for account bootstrap.",
+                "authMode": ctx.auth_mode,
+            }), 403
+
+        result = bootstrap_firebase_user_workspace(
+            user_id=ctx.user_id,
+            email=getattr(ctx, "email", ""),
+            display_name=getattr(ctx, "email", "").split("@")[0] if getattr(ctx, "email", "") else "",
+        )
+
+        selector = workspace_selector_payload(ctx.user_id, ctx.role, result["workspace"]["workspaceId"])
+
+        return jsonify({
+            "ok": True,
+            "created": bool(result.get("created")),
+            "user": ctx.to_payload(),
+            "customer": result.get("customer"),
+            "workspace": result.get("workspace"),
+            "membership": result.get("membership"),
+            **selector,
+        })
+
+
+@app.before_request
+def stage9f3_firebase_tenant_gate():
+    from flask import jsonify, request
+
+    if not _stage9f3_firebase_mode():
+        return None
+
+    path = request.path or ""
+
+    if _stage9f3_public_path(path):
+        return None
+
+    # Only app/API/media workspace traffic is guarded here.
+    # HTML pages load first; their fetch calls are protected by this gate.
+    guarded = path.startswith("/api/") or path.startswith("/media/workspaces/")
+    if not guarded:
+        return None
+
+    from services.auth_context import AuthError, auth_context_from_request, auth_error_payload, require_workspace_access
+
+    try:
+        ctx = auth_context_from_request(request)
+    except AuthError as exc:
+        return jsonify(auth_error_payload(exc)), exc.status_code
+
+    # Bootstrap needs identity, but it must work before the user's first workspace exists.
+    if path in {"/api/account/bootstrap"}:
+        return None
+
+    # Workspace media URLs contain the workspace ID in the path.
+    if path.startswith("/media/workspaces/"):
+        parts = [part for part in path.split("/") if part]
+        workspace_id = parts[2] if len(parts) >= 3 else ""
+        try:
+            require_workspace_access(ctx, workspace_id)
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+        return None
+
+    requested_workspace_id = _stage9f3_request_workspace_id()
+
+    if requested_workspace_id:
+        try:
+            require_workspace_access(ctx, requested_workspace_id)
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+        return None
+
+    if _stage9f3_workspace_id_required_path(path):
+        return jsonify({
+            "ok": False,
+            "error": "workspaceId is required.",
+            "message": "workspaceId is required.",
+            "authMode": ctx.auth_mode,
+            "path": path,
+        }), 400
+
+    return None
+
+
+def stage9f3_clone_voice_workspaces_override():
+    from flask import jsonify, request
+
+    from services.auth_context import AuthError, auth_context_from_request, auth_error_payload
+    from services.customer_workspace import workspace_selector_payload
+
+    try:
+        ctx = auth_context_from_request(request)
+    except AuthError as exc:
+        return jsonify(auth_error_payload(exc)), exc.status_code
+
+    payload = workspace_selector_payload(ctx.user_id, ctx.role, ctx.workspace_id)
+
+    return jsonify({
+        "ok": True,
+        "user": ctx.to_payload(),
+        **payload,
+    })
+
+
+# Replace the clone-voice workspace selector response with the account-aware selector.
+# This avoids trusting the old demo workspace list after Firebase auth is enabled.
+if "clone_voice_workspaces" in app.view_functions:
+    app.view_functions["clone_voice_workspaces"] = stage9f3_clone_voice_workspaces_override
+else:
+    app.add_url_rule(
+        "/api/clone-voice/workspaces",
+        endpoint="clone_voice_workspaces",
+        view_func=stage9f3_clone_voice_workspaces_override,
+        methods=["GET"],
+    )
+
+
+# Also override /api/account/workspaces if the old route exists.
+if "account_workspaces" in app.view_functions:
+    app.view_functions["account_workspaces"] = stage9f3_clone_voice_workspaces_override
+
+# === STAGE9F3_ACCOUNT_ONBOARDING_TENANT_GATE_END ===
+
+
+
+
+# === STAGE9F3C_AUTHERROR_GUARD_WRAPPER_START ===
+# Hard safety wrapper for older before_request guards that call
+# auth_context_from_request(request) directly. In Firebase mode, those calls
+# raise AuthError when the Bearer token is missing/invalid. This wrapper makes
+# those failures return clean JSON 401/403 instead of Flask 500 errors.
+if "stage9f3c_auth_error_handler_registered" not in app.config:
+    from flask import jsonify
+    from services.auth_context import AuthError, auth_error_payload
+
+    @app.errorhandler(AuthError)
+    def stage9f3c_handle_auth_error(exc):
+        return jsonify(auth_error_payload(exc)), exc.status_code
+
+    def stage9f3c_wrap_before_request_guard(original_func):
+        def wrapped_guard(*args, **kwargs):
+            try:
+                return original_func(*args, **kwargs)
+            except AuthError as exc:
+                return jsonify(auth_error_payload(exc)), exc.status_code
+
+        wrapped_guard.__name__ = f"stage9f3c_wrapped_{getattr(original_func, '__name__', 'before_request_guard')}"
+        wrapped_guard.__doc__ = getattr(original_func, "__doc__", None)
+        return wrapped_guard
+
+    before_funcs = list(app.before_request_funcs.get(None, []))
+    wrapped_funcs = []
+
+    for func in before_funcs:
+        name = getattr(func, "__name__", "")
+
+        if name == "syntaxmatrix_subscription_enforcement_guard":
+            wrapped_funcs.append(stage9f3c_wrap_before_request_guard(func))
+        else:
+            wrapped_funcs.append(func)
+
+    app.before_request_funcs[None] = wrapped_funcs
+    app.config["stage9f3c_auth_error_handler_registered"] = True
+# === STAGE9F3C_AUTHERROR_GUARD_WRAPPER_END ===
+
+
+
+
+# === STAGE9G1_HARD_AUTH_ASSET_WSGI_START ===
+# Hard WSGI bypass for auth page/assets. Some older catch-all frontend routes
+# serve index.html for unknown top-level files, which breaks /auth.css and /auth.js.
+# This bypass runs before Flask routing and returns the correct auth files directly.
+if "stage9g1_hard_auth_asset_wsgi_installed" not in app.config:
+    import mimetypes
+    from pathlib import Path
+
+    _stage9g1_original_wsgi_app = app.wsgi_app
+    _stage9g1_frontend_dir = Path(__file__).resolve().parent / "frontend" / "clone_voice"
+
+    _stage9g1_auth_files = {
+        "/auth": ("auth.html", "text/html; charset=utf-8"),
+        "/auth/": ("auth.html", "text/html; charset=utf-8"),
+        "/auth.css": ("auth.css", "text/css; charset=utf-8"),
+        "/auth.js": ("auth.js", "application/javascript; charset=utf-8"),
+        "/auth_bootstrap.js": ("auth_bootstrap.js", "application/javascript; charset=utf-8"),
+    }
+
+    def _stage9g1_response(start_response, status, content_type, body: bytes):
+        headers = [
+            ("Content-Type", content_type),
+            ("Content-Length", str(len(body))),
+            ("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"),
+            ("Pragma", "no-cache"),
+            ("Expires", "0"),
+        ]
+        start_response(status, headers)
+        return [body]
+
+    def _stage9g1_hard_auth_asset_wsgi(environ, start_response):
+        path = environ.get("PATH_INFO") or ""
+
+        if path in _stage9g1_auth_files:
+            filename, content_type = _stage9g1_auth_files[path]
+            file_path = _stage9g1_frontend_dir / filename
+
+            if file_path.exists() and file_path.is_file():
+                return _stage9g1_response(
+                    start_response,
+                    "200 OK",
+                    content_type,
+                    file_path.read_bytes(),
+                )
+
+            body = f"Missing auth asset: {filename}".encode("utf-8")
+            return _stage9g1_response(
+                start_response,
+                "404 Not Found",
+                "text/plain; charset=utf-8",
+                body,
+            )
+
+        return _stage9g1_original_wsgi_app(environ, start_response)
+
+    app.wsgi_app = _stage9g1_hard_auth_asset_wsgi
+    app.config["stage9g1_hard_auth_asset_wsgi_installed"] = True
+# === STAGE9G1_HARD_AUTH_ASSET_WSGI_END ===
+
+
+
+
+# === STAGE9H1_UPLOAD_LIMIT_AND_413_JSON_START ===
+# Cloud/private-beta upload limit. WAV files can be large, so keep this above
+# the preview duration limit. This prevents Flask from returning an HTML 413
+# page that the frontend then tries to parse as JSON.
+if "stage9h1_upload_limit_configured" not in app.config:
+    import os
+    from flask import jsonify
+    from werkzeug.exceptions import RequestEntityTooLarge
+
+    _stage9h1_upload_mb = int(os.getenv("ALIBABA_MEDIA_MAX_UPLOAD_MB", "80"))
+    app.config["MAX_CONTENT_LENGTH"] = _stage9h1_upload_mb * 1024 * 1024
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def stage9h1_request_entity_too_large(exc):
+        return jsonify({
+            "ok": False,
+            "error": "Uploaded file is too large.",
+            "message": f"Uploaded file is too large. Maximum upload size is {_stage9h1_upload_mb} MB.",
+            "maxUploadMb": _stage9h1_upload_mb,
+        }), 413
+
+    app.config["stage9h1_upload_limit_configured"] = True
+# === STAGE9H1_UPLOAD_LIMIT_AND_413_JSON_END ===
+
+
+
+
+# === STAGE9H2_WORKSPACE_DISCOVERY_GUARD_FIX_START ===
+# These endpoints are identity-required but workspace-discovery/bootstrap endpoints.
+# They must not be blocked by subscription enforcement before a workspace has been selected.
+if "stage9h2_workspace_discovery_guard_fix_installed" not in app.config:
+    from flask import jsonify, request
+    from services.auth_context import AuthError, auth_context_from_request, auth_error_payload
+
+    _stage9h2_original_before_funcs = list(app.before_request_funcs.get(None, []))
+
+    _stage9h2_discovery_paths = {
+        "/api/account/bootstrap",
+        "/api/account/workspaces",
+        "/api/clone-voice/workspaces",
+    }
+
+    def _stage9h2_identity_only_workspace_discovery_guard():
+        path = request.path or ""
+
+        if path not in _stage9h2_discovery_paths:
+            return None
+
+        try:
+            # Require a valid Firebase identity, but do not require workspaceId yet.
+            auth_context_from_request(request)
+            return None
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+
+    def _stage9h2_skip_subscription_guard_for_discovery(original_func):
+        def wrapped_guard(*args, **kwargs):
+            path = request.path or ""
+            if path in _stage9h2_discovery_paths:
+                return None
+            return original_func(*args, **kwargs)
+
+        wrapped_guard.__name__ = f"stage9h2_wrapped_{getattr(original_func, '__name__', 'guard')}"
+        wrapped_guard.__doc__ = getattr(original_func, "__doc__", None)
+        return wrapped_guard
+
+    _stage9h2_new_before_funcs = [
+        _stage9h2_identity_only_workspace_discovery_guard
+    ]
+
+    for func in _stage9h2_original_before_funcs:
+        name = getattr(func, "__name__", "")
+
+        # The subscription guard is the one causing workspace discovery to fail.
+        if "syntaxmatrix_subscription_enforcement_guard" in name:
+            _stage9h2_new_before_funcs.append(_stage9h2_skip_subscription_guard_for_discovery(func))
+        elif "stage9f3c_wrapped_syntaxmatrix_subscription_enforcement_guard" in name:
+            _stage9h2_new_before_funcs.append(_stage9h2_skip_subscription_guard_for_discovery(func))
+        else:
+            _stage9h2_new_before_funcs.append(func)
+
+    app.before_request_funcs[None] = _stage9h2_new_before_funcs
+    app.config["stage9h2_workspace_discovery_guard_fix_installed"] = True
+# === STAGE9H2_WORKSPACE_DISCOVERY_GUARD_FIX_END ===
+
+
 if __name__ == "__main__":
     print("SyntaxMatrix Media Studio Flask")
     print(f"Open: http://{HOST}:{PORT}")

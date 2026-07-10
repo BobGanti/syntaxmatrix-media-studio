@@ -170,25 +170,6 @@ def _generate_standard_preview(voice_parameter: str, preview_path):
     normalize_generated_audio_file(preview_path)
 
 
-# def _print_received_source(prompt: str, title: str, audio_file, source_mode: str) -> None:
-#     print("\n" + "=" * 100, flush=True)
-#     print("[clone_voice_controller] FROM SOURCE", flush=True)
-#     print("sourceMode:", repr(source_mode), flush=True)
-#     print("FORM KEYS:", list(request.form.keys()), flush=True)
-#     print("FILE KEYS:", list(request.files.keys()), flush=True)
-#     print("title:", repr(title), flush=True)
-#     print("prompt_length:", len(prompt), flush=True)
-
-#     if audio_file:
-#         print("audio.filename:", repr(audio_file.filename), flush=True)
-#         print("audio.mimetype:", repr(audio_file.mimetype), flush=True)
-#         print("audio.content_type:", repr(audio_file.content_type), flush=True)
-#     else:
-#         print("audio: None", flush=True)
-
-#     print("=" * 100 + "\n", flush=True)
-
-
 def register_clone_voice_routes(app):
 
     if "billing_plans" not in app.view_functions:
@@ -209,8 +190,6 @@ def register_clone_voice_routes(app):
                 "ok": True,
                 **usage_summary(workspace_id, month),
             })
-
-
 
 
     if "billing_pricing_config" not in app.view_functions:
