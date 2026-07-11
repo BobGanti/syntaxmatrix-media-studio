@@ -542,13 +542,133 @@
     return document.querySelector(`input[name="${groupName}"]:checked`)?.value || "";
   }
 
-  async function playPreview(url) {
-    if (!url) return;
+    let activePreviewAudio = null;
+    let activePreviewButton = null;
+    let activePreviewObjectUrl = "";
+    let activePreviewRequestId = 0;
 
-    audioPlayer.classList.remove("hidden");
-    audioPlayer.src = `${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`;
-    await audioPlayer.play().catch(() => {});
-  }
+    function setPreviewButtonState(button, state) {
+      if (!button) return;
+
+      const icon = button.querySelector("[aria-hidden='true']");
+      button.dataset.previewState = state;
+      button.classList.toggle("is-playing", state === "playing");
+
+      if (state === "playing") {
+        button.setAttribute("aria-label", "Stop voice preview");
+        button.setAttribute("title", "Stop preview");
+        if (icon) icon.textContent = "■";
+        return;
+      }
+
+      if (state === "loading") {
+        button.setAttribute("aria-label", "Loading voice preview");
+        button.setAttribute("title", "Loading preview");
+        if (icon) icon.textContent = "…";
+        return;
+      }
+
+      button.setAttribute("aria-label", "Play voice preview");
+      button.setAttribute("title", "Play preview");
+      if (icon) icon.textContent = "▶";
+    }
+
+    function stopActivePreview() {
+      activePreviewRequestId += 1;
+
+      if (activePreviewAudio) {
+        try {
+          activePreviewAudio.pause();
+          activePreviewAudio.currentTime = 0;
+        } catch (error) {
+          console.warn("[Clone Voice] Could not stop preview:", error);
+        }
+      }
+
+      if (activePreviewObjectUrl) {
+        URL.revokeObjectURL(activePreviewObjectUrl);
+      }
+
+      setPreviewButtonState(activePreviewButton, "idle");
+
+      activePreviewAudio = null;
+      activePreviewButton = null;
+      activePreviewObjectUrl = "";
+    }
+
+    async function playPreview(url, button) {
+      if (!url || !button) return;
+
+      if (
+        activePreviewButton === button &&
+        button.dataset.previewState !== "idle"
+      ) {
+        stopActivePreview();
+        return;
+      }
+
+      stopActivePreview();
+
+      const requestId = activePreviewRequestId;
+      activePreviewButton = button;
+      setPreviewButtonState(button, "loading");
+
+      try {
+        const separator = url.includes("?") ? "&" : "?";
+        const response = await fetch(
+          `${url}${separator}t=${Date.now()}`,
+          { cache: "no-store" }
+        );
+
+        if (!response.ok) {
+          const details = await response.text().catch(() => "");
+          throw new Error(
+            `Voice preview failed (${response.status}). ${details.slice(0, 160)}`
+          );
+        }
+
+        const blob = await response.blob();
+
+        if (!blob.size) {
+          throw new Error("Voice preview response was empty.");
+        }
+
+        if (
+          requestId !== activePreviewRequestId ||
+          activePreviewButton !== button
+        ) {
+          return;
+        }
+
+        const objectUrl = URL.createObjectURL(blob);
+        const audio = new Audio(objectUrl);
+
+        activePreviewObjectUrl = objectUrl;
+        activePreviewAudio = audio;
+
+        audio.addEventListener("ended", () => {
+          if (activePreviewAudio === audio) {
+            stopActivePreview();
+          }
+        }, { once: true });
+
+        audio.addEventListener("error", () => {
+          if (activePreviewAudio === audio) {
+            stopActivePreview();
+          }
+        }, { once: true });
+
+        setPreviewButtonState(button, "playing");
+        await audio.play();
+      } catch (error) {
+        if (requestId === activePreviewRequestId) {
+          stopActivePreview();
+        }
+
+        console.error("[Clone Voice] Preview playback failed:", error);
+        alert(error.message || "Could not play the voice preview.");
+      }
+    }
 
   function requireSelectedGender() {
     const gender = voiceGender.value;
@@ -1016,7 +1136,10 @@
 
     if (previewButton) {
       event.preventDefault();
-      playPreview(previewButton.getAttribute("data-preview-url"));
+      playPreview(
+          previewButton.getAttribute("data-preview-url"),
+          previewButton
+        );
     }
   });
 
