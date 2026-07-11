@@ -116,3 +116,42 @@ CREATE TABLE IF NOT EXISTS stripe_price_catalog (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Durable saved voice identities. Provider voice IDs and display metadata live
+-- in PostgreSQL; preview audio remains in object storage.
+CREATE TABLE IF NOT EXISTS workspace_voices (
+    workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
+    voice_id TEXT NOT NULL,
+    provider_voice_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    gender TEXT NOT NULL,
+    source_type TEXT NOT NULL DEFAULT 'upload',
+    preview_object_key TEXT,
+    preview_content_type TEXT NOT NULL DEFAULT 'audio/wav',
+    status TEXT NOT NULL DEFAULT 'active',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (workspace_id, voice_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_voices_workspace_status
+    ON workspace_voices(workspace_id, status, updated_at DESC);
+
+
+-- Durable global system voice identities managed by platform administrators.
+CREATE TABLE IF NOT EXISTS system_voices (
+    voice_id TEXT PRIMARY KEY,
+    provider_voice_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    gender TEXT NOT NULL,
+    preview_object_key TEXT,
+    preview_content_type TEXT NOT NULL DEFAULT 'audio/wav',
+    status TEXT NOT NULL DEFAULT 'active',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_voices_status
+    ON system_voices(status, updated_at DESC);

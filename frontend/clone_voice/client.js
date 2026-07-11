@@ -52,7 +52,7 @@
   const downloadLink = $("#downloadLink");
   const resultBox = $("#resultBox");
 
-  let activeWorkspaceId = "mock_user_001";
+  let activeWorkspaceId = "";
   let availableWorkspaces = [];
 
   let maxVoiceSourceSeconds = 20;
@@ -84,6 +84,31 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
+  }
+
+
+  async function parseApiResponse(response) {
+    const raw = await response.text();
+
+    if (!raw.trim()) {
+      return {};
+    }
+
+    try {
+      return JSON.parse(raw);
+    } catch (_error) {
+      const plainText = raw
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 240);
+
+      const status = `${response.status} ${response.statusText || ""}`.trim();
+      const detail = plainText ? `: ${plainText}` : "";
+      throw new Error(`Server returned HTTP ${status} instead of JSON${detail}`);
+    }
   }
 
   function selectedMode() {
@@ -133,27 +158,35 @@
   async function loadWorkspaces() {
     try {
       const response = await fetch(`/api/clone-voice/workspaces?t=${Date.now()}`, { cache: "no-store" });
-      const data = await response.json();
+      const data = await parseApiResponse(response);
 
       if (!response.ok || !data.ok) {
         throw new Error(data.message || data.error || "Could not load workspaces");
       }
 
-      availableWorkspaces = data.workspaces && data.workspaces.length ? data.workspaces : fallbackWorkspaces();
-      activeWorkspaceId = data.defaultWorkspaceId || availableWorkspaces[0].workspaceId || "mock_user_001";
+      availableWorkspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
+      if (!availableWorkspaces.length) {
+        throw new Error("No active workspace is assigned to this account.");
+      }
+      activeWorkspaceId = data.defaultWorkspaceId || availableWorkspaces[0].workspaceId;
     } catch (error) {
-      console.warn("[Clone Voice] Could not load workspace list. Using fallback.", error);
-      availableWorkspaces = fallbackWorkspaces();
-      activeWorkspaceId = "mock_user_001";
+      console.error("[Clone Voice] Could not load workspace list.", error);
+      availableWorkspaces = [];
+      activeWorkspaceId = "";
+      workspaceSelect.innerHTML = '<option value="">Workspace unavailable</option>';
+      workspaceSelect.disabled = true;
+      resultBox.textContent = error.message || "Could not load your workspace.";
+      return;
     }
 
+    workspaceSelect.disabled = false;
     renderWorkspaceOptions();
     setWorkspaceStatus();
     await loadSavedVoices();
   }
 
   async function switchWorkspace(workspaceId) {
-    activeWorkspaceId = workspaceId || "mock_user_001";
+    activeWorkspaceId = workspaceId || "";
     setWorkspaceStatus();
 
     savedVoices = [];
@@ -231,7 +264,7 @@
   async function loadCloneVoiceSettings() {
     try {
       const response = await fetch(`/api/clone-voice/settings?t=${Date.now()}`, { cache: "no-store" });
-      const data = await response.json();
+      const data = await parseApiResponse(response);
 
       if (response.ok && data.ok && data.maxVoiceSourceSeconds) {
         maxVoiceSourceSeconds = Number(data.maxVoiceSourceSeconds) || 20;
@@ -507,7 +540,7 @@
         cache: "no-store"
       });
 
-      const data = await response.json();
+      const data = await parseApiResponse(response);
 
       if (!response.ok || !data.ok) {
         throw new Error(data.message || data.error || "Could not load saved voices");
@@ -525,7 +558,7 @@
 
     try {
       const response = await fetch(`/api/clone-voice/system-voices?t=${Date.now()}`, { cache: "no-store" });
-      const data = await response.json();
+      const data = await parseApiResponse(response);
 
       if (!response.ok || !data.ok) {
         throw new Error(data.message || data.error || "Could not load system voices");
@@ -682,6 +715,50 @@
     return gender;
   }
 
+  async function createDirectUploadSession(endpoint, file, extra = {}) {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: file.name || "voice_source.wav",
+        contentType: file.type || "application/octet-stream",
+        sizeBytes: file.size,
+        ...extra
+      })
+    });
+    const data = await parseApiResponse(response);
+    if (!response.ok || !data.ok || !data.uploadUrl || !data.objectKey) {
+      throw new Error(data.message || data.error || "Could not create a direct upload session");
+    }
+    return data;
+  }
+
+  async function putFileIntoUploadSession(session, file) {
+    const response = await fetch(session.uploadUrl, {
+      method: session.method || "PUT",
+      headers: {
+        "Content-Type": session.contentType || file.type || "application/octet-stream"
+      },
+      body: file,
+      credentials: "omit",
+      cache: "no-store"
+    });
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => "")).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 240);
+      throw new Error(`Direct storage upload failed with HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+    }
+  }
+
+  async function uploadWorkspaceVoiceSource(file, purpose = "create") {
+    const session = await createDirectUploadSession(
+      "/api/clone-voice/source-uploads/workspace/session",
+      file,
+      { workspaceId: activeWorkspaceId, purpose }
+    );
+    await putFileIntoUploadSession(session, file);
+    return session;
+  }
+
   async function saveClientVoice() {
     const mode = selectedMode();
 
@@ -691,63 +768,55 @@
     }
 
     const selectedGender = requireSelectedGender();
-
-    if (!selectedGender) {
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("workspaceId", activeWorkspaceId);
-    formData.append("sourceMode", mode);
-    formData.append("voiceDisplayName", voiceDisplayName.value.trim());
-    formData.append("gender", selectedGender);
-
-    if (mode === "upload") {
-      const file = audioFile.files[0];
-
-      if (!file) {
-        alert("Choose an audio file first.");
-        return;
-      }
-
-      formData.append("audio", file, file.name);
-    }
-
-    if (mode === "record") {
-      if (!recordedBlob) {
-        alert("Record a voice first.");
-        return;
-      }
-
-      formData.append("audio", recordedBlob, recordedFilename || "recorded_voice.webm");
-    }
+    if (!selectedGender) return;
 
     saveVoiceBtn.disabled = true;
     saveVoiceBtn.textContent = "Saving voice...";
-    resultBox.textContent = "Saving voice and generating standard preview...";
     audioPlayer.classList.add("hidden");
     downloadLink.classList.add("hidden");
 
     try {
-      const response = await fetch("/api/clone-voice/voices/from-source", {
-        method: "POST",
-        body: formData
-      });
+      let response;
 
-      const data = await response.json();
-      console.log("[Clone Voice saved voice response]", data);
+      if (mode === "upload") {
+        const file = audioFile.files[0];
+        if (!file) throw new Error("Choose an audio file first.");
 
+        resultBox.textContent = "Uploading voice source directly to secure storage...";
+        const session = await uploadWorkspaceVoiceSource(file, "create");
+        resultBox.textContent = "Upload complete. The backend is checking duration, trimming to D when required, and creating the voice...";
+
+        response = await fetch("/api/clone-voice/source-uploads/workspace/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            workspaceId: activeWorkspaceId,
+            sourceMode: "upload",
+            voiceDisplayName: voiceDisplayName.value.trim(),
+            gender: selectedGender,
+            objectKey: session.objectKey,
+            originalFilename: file.name,
+            sizeBytes: file.size
+          })
+        });
+      } else {
+        if (!recordedBlob) throw new Error("Record a voice first.");
+        const formData = new FormData();
+        formData.append("workspaceId", activeWorkspaceId);
+        formData.append("sourceMode", "record");
+        formData.append("voiceDisplayName", voiceDisplayName.value.trim());
+        formData.append("gender", selectedGender);
+        formData.append("audio", recordedBlob, recordedFilename || "recorded_voice.webm");
+        resultBox.textContent = "Saving recorded voice and generating standard preview...";
+        response = await fetch("/api/clone-voice/voices/from-source", { method: "POST", body: formData });
+      }
+
+      const data = await parseApiResponse(response);
       if (!response.ok || !data.ok) {
         throw new Error(data.message || data.error || "Could not save voice");
       }
 
       renderVoiceSavedResult(data);
-
-      if (data.voicePreviewUrl) {
-        audioPlayer.src = `${data.voicePreviewUrl}${data.voicePreviewUrl.includes("?") ? "&" : "?"}t=${Date.now()}`;
-        audioPlayer.classList.remove("hidden");
-      }
-
       pendingSelectSavedVoiceId = data.voiceId || "";
       await loadSavedVoices();
       setSelectedMode("saved");
@@ -824,7 +893,7 @@
         }
       );
 
-      const data = await response.json();
+      const data = await parseApiResponse(response);
 
       if (!response.ok || !data.ok) {
         throw new Error(data.message || data.error || "Could not update voice details");
@@ -860,81 +929,55 @@
 
   async function replaceSelectedSavedVoiceSource() {
     const voice = selectedSavedVoice();
+    const file = replaceSavedVoiceAudio.files[0];
 
     if (!voice) {
       alert("Choose a saved voice first.");
       return;
     }
-
-    const file = replaceSavedVoiceAudio.files[0];
-
     if (!file) {
-      alert("Choose replacement audio first.");
-      replaceSavedVoiceAudio.focus();
+      alert("Choose a replacement audio file.");
       return;
     }
 
     const displayName = editSavedVoiceDisplayName.value.trim() || voice.displayName || voice.voiceId;
     const gender = editSavedVoiceGender.value || voice.gender;
-
     if (gender !== "M" && gender !== "F") {
       alert("Choose Male (M) or Female (F).");
-      editSavedVoiceGender.focus();
       return;
     }
-
-    const ok = confirm(`Replace source for ${voice.label || voice.voiceId}? This rebuilds its parameter and preview.`);
-
-    if (!ok) return;
-
-    const formData = new FormData();
-    formData.append("workspaceId", activeWorkspaceId);
-    formData.append("displayName", displayName);
-    formData.append("gender", gender);
-    formData.append("audio", file, file.name);
+    if (!confirm(`Replace source for ${voice.label || voice.voiceId}? This rebuilds its parameter and preview.`)) return;
 
     replaceSavedVoiceSourceBtn.disabled = true;
     replaceSavedVoiceSourceBtn.textContent = "Replacing...";
-    resultBox.textContent = "Replacing voice source and rebuilding standard preview...";
+    resultBox.textContent = "Uploading replacement source directly to secure storage...";
 
     try {
-      const response = await fetch(
-        `/api/clone-voice/my-voices/${encodeURIComponent(voice.voiceId)}/replace-source`,
-        {
-          method: "POST",
-          body: formData
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok || !data.ok) {
-        throw new Error(data.message || data.error || "Could not replace voice source");
-      }
+      const session = await uploadWorkspaceVoiceSource(file, "replace");
+      resultBox.textContent = "Upload complete. The backend is checking duration, trimming to D when required, and rebuilding the voice...";
+      const response = await fetch("/api/clone-voice/source-uploads/workspace/replace", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: activeWorkspaceId,
+          voiceId: voice.voiceId,
+          displayName,
+          gender,
+          objectKey: session.objectKey,
+          originalFilename: file.name,
+          sizeBytes: file.size
+        })
+      });
+      const data = await parseApiResponse(response);
+      if (!response.ok || !data.ok) throw new Error(data.message || data.error || "Could not replace voice source");
 
       resultBox.innerHTML = `
         <strong>Voice source replaced.</strong>
         <div class="result-grid">
-          <div class="result-row">
-            <div class="result-label">Voice</div>
-            <div class="result-value">${escapeHtml(data.label || data.displayName || data.voiceId)}</div>
-          </div>
-          <div class="result-row">
-            <div class="result-label">Parameter</div>
-            <div class="result-value">Rebuilt</div>
-          </div>
-          <div class="result-row">
-            <div class="result-label">Preview</div>
-            <div class="result-value">Rebuilt</div>
-          </div>
-        </div>
-      `;
-
-      if (data.voicePreviewUrl) {
-        audioPlayer.src = `${data.voicePreviewUrl}${data.voicePreviewUrl.includes("?") ? "&" : "?"}t=${Date.now()}`;
-        audioPlayer.classList.remove("hidden");
-      }
-
+          <div class="result-row"><div class="result-label">Voice</div><div class="result-value">${escapeHtml(data.label || data.displayName || data.voiceId)}</div></div>
+          <div class="result-row"><div class="result-label">Source duration</div><div class="result-value">${Number(data.sourceDurationSeconds || 0).toFixed(1)} seconds</div></div>
+          <div class="result-row"><div class="result-label">Trimmed to D</div><div class="result-value">${data.sourceTrimmed ? "Yes" : "No"}</div></div>
+        </div>`;
       pendingSelectSavedVoiceId = data.voiceId || voice.voiceId;
       await loadSavedVoices();
     } catch (error) {
@@ -958,7 +1001,7 @@
         { method: "DELETE" }
       );
 
-      const data = await response.json();
+      const data = await parseApiResponse(response);
 
       if (!response.ok || !data.ok) {
         throw new Error(data.message || data.error || "Could not delete saved voice");
@@ -1055,7 +1098,7 @@
         body: formData
       });
 
-      const data = await response.json();
+      const data = await parseApiResponse(response);
       console.log("[Clone Voice narration response]", data);
 
       if (!response.ok || !data.ok) {

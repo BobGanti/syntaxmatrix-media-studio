@@ -110,6 +110,25 @@ class BaseObjectStorage:
     def read_bytes(self, key: str) -> bytes:
         raise NotImplementedError
 
+    def download_to_file(self, key: str, destination_path: str | pathlib.Path) -> StoredObject:
+        raise NotImplementedError
+
+    def metadata(self, key: str) -> StoredObject:
+        raise NotImplementedError
+
+    def create_resumable_upload_session(
+        self,
+        key: str,
+        *,
+        content_type: str,
+        size: int,
+        origin: str,
+        metadata: dict[str, str] | None = None,
+    ) -> str:
+        raise ObjectStorageNotConfigured(
+            "Direct resumable upload sessions require OBJECT_STORAGE_BACKEND=gcs."
+        )
+
     def exists(self, key: str) -> bool:
         raise NotImplementedError
 
@@ -182,6 +201,34 @@ class LocalObjectStorage(BaseObjectStorage):
             raise ObjectStorageError(f"Object not found: {_normalise_key(key)}")
 
         return path.read_bytes()
+
+    def download_to_file(self, key: str, destination_path: str | pathlib.Path) -> StoredObject:
+        source = self._path_for_key(key)
+        if not source.exists():
+            raise ObjectStorageError(f"Object not found: {_normalise_key(key)}")
+        destination = pathlib.Path(destination_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+        return StoredObject(
+            backend=self.backend_name,
+            key=_normalise_key(key),
+            uri=f"file://{source}",
+            size=source.stat().st_size,
+            content_type=_guess_content_type(str(source)),
+        )
+
+    def metadata(self, key: str) -> StoredObject:
+        source = self._path_for_key(key)
+        if not source.exists():
+            raise ObjectStorageError(f"Object not found: {_normalise_key(key)}")
+        safe_key = _normalise_key(key)
+        return StoredObject(
+            backend=self.backend_name,
+            key=safe_key,
+            uri=f"file://{source}",
+            size=source.stat().st_size,
+            content_type=_guess_content_type(safe_key),
+        )
 
     def exists(self, key: str) -> bool:
         return self._path_for_key(key).exists()
@@ -261,6 +308,54 @@ class GcsObjectStorage(BaseObjectStorage):
 
     def read_bytes(self, key: str) -> bytes:
         return self._blob(key).download_as_bytes()
+
+    def download_to_file(self, key: str, destination_path: str | pathlib.Path) -> StoredObject:
+        safe_key = _normalise_key(key)
+        destination = pathlib.Path(destination_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        blob = self._blob(safe_key)
+        blob.reload()
+        blob.download_to_filename(str(destination))
+        return StoredObject(
+            backend=self.backend_name,
+            key=safe_key,
+            uri=f"gs://{self.bucket_name}/{safe_key}",
+            size=int(blob.size or destination.stat().st_size),
+            content_type=blob.content_type or _guess_content_type(safe_key),
+        )
+
+    def metadata(self, key: str) -> StoredObject:
+        safe_key = _normalise_key(key)
+        blob = self._blob(safe_key)
+        blob.reload()
+        return StoredObject(
+            backend=self.backend_name,
+            key=safe_key,
+            uri=f"gs://{self.bucket_name}/{safe_key}",
+            size=int(blob.size) if blob.size is not None else None,
+            content_type=blob.content_type or _guess_content_type(safe_key),
+        )
+
+    def create_resumable_upload_session(
+        self,
+        key: str,
+        *,
+        content_type: str,
+        size: int,
+        origin: str,
+        metadata: dict[str, str] | None = None,
+    ) -> str:
+        safe_key = _normalise_key(key)
+        blob = self._blob(safe_key)
+        blob.content_type = content_type or _guess_content_type(safe_key)
+        if metadata:
+            blob.metadata = {str(k): str(v) for k, v in metadata.items()}
+        return blob.create_resumable_upload_session(
+            content_type=blob.content_type,
+            size=int(size),
+            origin=_clean(origin) or None,
+            if_generation_match=0,
+        )
 
     def exists(self, key: str) -> bool:
         return bool(self._blob(key).exists())
@@ -350,6 +445,10 @@ def object_key_for_voice_preview(workspace_id: str, filename: str) -> str:
 
 def object_key_for_generated_audio(workspace_id: str, filename: str) -> str:
     return _normalise_key(f"workspaces/{workspace_id}/generated_audio/{filename}")
+
+
+def object_key_for_system_voice_preview(filename: str) -> str:
+    return _normalise_key(f"system_voices/previews/{filename}")
 
 
 def new_object_filename(suffix: str = "") -> str:

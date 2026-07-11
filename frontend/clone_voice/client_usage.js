@@ -233,10 +233,10 @@
     const active = document.querySelector("[data-workspace-id], [data-workspaceid]");
 
     if (active) {
-      return active.getAttribute("data-workspace-id") || active.getAttribute("data-workspaceid") || "mock_user_001";
+      return active.getAttribute("data-workspace-id") || active.getAttribute("data-workspaceid") || "";
     }
 
-    return "mock_user_001";
+    return "";
   }
 
   function statusClass(payload) {
@@ -496,6 +496,10 @@
     card.classList.add("smx-usage-loading");
 
     const workspaceId = currentWorkspaceId();
+    if (!workspaceId) {
+      card.classList.remove("smx-usage-loading");
+      return null;
+    }
     const url = `/api/billing/entitlement?workspaceId=${encodeURIComponent(workspaceId)}&t=${Date.now()}`;
 
     inFlight = fetch(url, {
@@ -548,6 +552,8 @@
           requestUrl.includes("/api/clone-voice/from-saved") ||
           requestUrl.includes("/api/clone-voice/from-system") ||
           requestUrl.includes("/api/clone-voice/voices/from-source") ||
+          requestUrl.includes("/api/clone-voice/source-uploads/workspace/complete") ||
+          requestUrl.includes("/api/clone-voice/source-uploads/workspace/replace") ||
           (requestUrl.includes("/api/clone-voice/my-voices/") && requestUrl.includes("/replace-source"))
         ) {
           scheduleRefresh();

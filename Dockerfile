@@ -22,4 +22,4 @@ ENV PORT=8080
 ENV HOST=0.0.0.0
 ENV FLASK_DEBUG=0
 
-CMD exec gunicorn --bind 0.0.0.0:${PORT} --workers 2 --threads 8 --timeout 300 app:app
+CMD exec gunicorn --bind 0.0.0.0:${PORT} --workers 2 --threads 8 --timeout 900 app:app

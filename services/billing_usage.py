@@ -10,6 +10,8 @@ import uuid
 from collections import defaultdict
 from typing import Any
 
+from services.persistence_repository import get_persistence_repository
+
 from services.billing_pricing import (
     estimate_provider_cost_for_event,
     get_billing_plan_map,
@@ -109,9 +111,16 @@ def billing_plans_payload() -> dict[str, Any]:
 
 
 def get_workspace_subscription(workspace_id: str) -> dict[str, Any]:
-    workspace_id = str(workspace_id or "unknown_workspace").strip() or "unknown_workspace"
-    data = _read_subscriptions()
-    row = data.get(workspace_id) or {}
+    workspace_id = (
+        str(workspace_id or "unknown_workspace").strip()
+        or "unknown_workspace"
+    )
+
+    row = (
+        get_persistence_repository()
+        .get_workspace_subscription(workspace_id)
+        or {}
+    )
 
     plans = get_billing_plan_map()
     plan_key = row.get("planKey") or DEFAULT_PLAN_KEY
@@ -129,6 +138,11 @@ def get_workspace_subscription(workspace_id: str) -> dict[str, Any]:
         "provider": row.get("provider") or "manual",
         "customerId": row.get("customerId") or "",
         "subscriptionId": row.get("subscriptionId") or "",
+        "stripeCustomerId": row.get("stripeCustomerId") or "",
+        "stripeSubscriptionId": (
+            row.get("stripeSubscriptionId") or ""
+        ),
+        "checkoutSessionId": row.get("checkoutSessionId") or "",
         "updatedAt": row.get("updatedAt") or "",
     }
 
@@ -153,18 +167,27 @@ def set_workspace_plan(
     if plan_key not in plans:
         raise ValueError(f"Unknown planKey: {plan_key}")
 
-    data = _read_subscriptions()
+    plan = plans[plan_key]
 
-    data[workspace_id] = {
-        "planKey": plan_key,
-        "status": status or "active",
-        "provider": provider or "manual",
-        "customerId": customer_id or "",
-        "subscriptionId": subscription_id or "",
-        "updatedAt": _utc_now(),
-    }
-
-    _write_subscriptions(data)
+    get_persistence_repository().upsert_workspace_subscription(
+        workspace_id,
+        {
+            "workspaceId": workspace_id,
+            "planKey": plan_key,
+            "planLabel": (
+                plan.get("label")
+                or plan.get("name")
+                or plan_key
+            ),
+            "status": status or "active",
+            "provider": provider or "manual",
+            "customerId": customer_id or "",
+            "subscriptionId": subscription_id or "",
+            "monthlyCredits": plan.get("monthlyCredits"),
+            "monthlyCreditLimit": plan.get("monthlyCredits"),
+            "monthlyPrice": plan.get("monthlyPrice"),
+        },
+    )
 
     return get_workspace_subscription(workspace_id)
 
@@ -215,10 +238,14 @@ def record_usage_event(
     credits: int | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    _ensure_dirs()
-
-    workspace_id = str(workspace_id or "unknown_workspace").strip() or "unknown_workspace"
-    event_type = str(event_type or "unknown_event").strip() or "unknown_event"
+    workspace_id = (
+        str(workspace_id or "unknown_workspace").strip()
+        or "unknown_workspace"
+    )
+    event_type = (
+        str(event_type or "unknown_event").strip()
+        or "unknown_event"
+    )
     quantity = _safe_number(quantity, 1.0)
 
     if credits is None:
@@ -227,51 +254,40 @@ def record_usage_event(
     event = {
         "eventId": str(uuid.uuid4()),
         "timestamp": _utc_now(),
+        "createdAt": _utc_now(),
         "month": _month_key(),
         "workspaceId": workspace_id,
         "eventType": event_type,
         "quantity": quantity,
         "credits": int(credits or 0),
-        "estimatedProviderCost": estimate_provider_cost_for_event(event_type, quantity),
+        "estimatedProviderCost": (
+            estimate_provider_cost_for_event(
+                event_type,
+                quantity,
+            )
+        ),
         "metadata": metadata or {},
     }
 
-    with LEDGER_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+    get_persistence_repository().append_usage_event(event)
 
     print("[billing_usage] recorded:", event, flush=True)
-
     return event
 
 
-def read_usage_events(workspace_id: str | None = None, month: str | None = None) -> list[dict[str, Any]]:
-    if not LEDGER_PATH.exists():
-        return []
-
+def read_usage_events(
+    workspace_id: str | None = None,
+    month: str | None = None,
+) -> list[dict[str, Any]]:
     month = month or _month_key()
-    rows: list[dict[str, Any]] = []
 
-    with LEDGER_PATH.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-
-            if not line:
-                continue
-
-            try:
-                event = json.loads(line)
-            except Exception:
-                continue
-
-            if workspace_id and event.get("workspaceId") != workspace_id:
-                continue
-
-            if month and event.get("month") != month:
-                continue
-
-            rows.append(event)
-
-    return rows
+    return (
+        get_persistence_repository()
+        .list_usage_events(
+            workspace_id=workspace_id,
+            month=month,
+        )
+    )
 
 
 def usage_summary(workspace_id: str, month: str | None = None) -> dict[str, Any]:

@@ -20,6 +20,8 @@ USAGE_EVENTS_PATH = USAGE_DIR / "usage_events.jsonl"
 STRIPE_EVENTS_PATH = BILLING_DIR / "stripe_webhook_events.jsonl"
 STRIPE_PROCESSED_PATH = BILLING_DIR / "stripe_processed_events.json"
 STRIPE_PRICE_MAP_PATH = BILLING_DIR / "stripe_price_map.json"
+WORKSPACE_VOICES_PATH = BILLING_DIR / "workspace_voices.json"
+SYSTEM_VOICES_PATH = BILLING_DIR / "system_voices.json"
 
 
 def _now() -> str:
@@ -59,6 +61,48 @@ def _write_json(path: pathlib.Path, data: Any) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     tmp.replace(path)
+
+
+def _upsert_json_record(
+    path: pathlib.Path,
+    key_name: str,
+    record: dict[str, Any],
+) -> dict[str, Any]:
+    rows = _read_json(path, [])
+
+    if not isinstance(rows, list):
+        rows = []
+
+    item = dict(record)
+    key_value = _clean(item.get(key_name))
+
+    if not key_value:
+        raise ValueError(f"{key_name} is required")
+
+    now = _now()
+
+    for index, existing in enumerate(rows):
+        if not isinstance(existing, dict):
+            continue
+
+        if _clean(existing.get(key_name)) != key_value:
+            continue
+
+        updated = dict(existing)
+        updated.update(item)
+        updated[key_name] = key_value
+        updated["createdAt"] = existing.get("createdAt") or item.get("createdAt") or now
+        updated["updatedAt"] = now
+        rows[index] = updated
+        _write_json(path, rows)
+        return updated
+
+    item[key_name] = key_value
+    item["createdAt"] = item.get("createdAt") or now
+    item["updatedAt"] = now
+    rows.append(item)
+    _write_json(path, rows)
+    return item
 
 
 def _append_jsonl(path: pathlib.Path, row: dict[str, Any]) -> None:
@@ -185,6 +229,52 @@ class PersistenceRepository(Protocol):
     def list_memberships(self) -> list[dict[str, Any]]:
         ...
 
+    # GATE1_DURABLE_PERSISTENCE
+    def upsert_customer(self, record: dict[str, Any]) -> dict[str, Any]:
+        ...
+
+    def upsert_workspace(self, record: dict[str, Any]) -> dict[str, Any]:
+        ...
+
+    def upsert_membership(self, record: dict[str, Any]) -> dict[str, Any]:
+        ...
+
+    def list_usage_events(
+        self,
+        workspace_id: str | None = None,
+        month: str | None = None,
+    ) -> list[dict[str, Any]]:
+        ...
+
+    def list_workspace_voices(self, workspace_id: str) -> list[dict[str, Any]]:
+        ...
+
+    def get_workspace_voice(self, workspace_id: str, voice_id: str) -> dict[str, Any] | None:
+        ...
+
+    def upsert_workspace_voice(
+        self,
+        workspace_id: str,
+        voice_id: str,
+        record: dict[str, Any],
+    ) -> dict[str, Any]:
+        ...
+
+    def delete_workspace_voice(self, workspace_id: str, voice_id: str) -> bool:
+        ...
+
+    def list_system_voices(self) -> list[dict[str, Any]]:
+        ...
+
+    def get_system_voice(self, voice_id: str) -> dict[str, Any] | None:
+        ...
+
+    def upsert_system_voice(self, voice_id: str, record: dict[str, Any]) -> dict[str, Any]:
+        ...
+
+    def delete_system_voice(self, voice_id: str) -> bool:
+        ...
+
     def get_workspace_subscription(self, workspace_id: str) -> dict[str, Any] | None:
         ...
 
@@ -236,6 +326,199 @@ class JsonPersistenceRepository:
         data = _read_json(MEMBERSHIPS_PATH, [])
 
         return [dict(row) for row in data if isinstance(row, dict)] if isinstance(data, list) else []
+
+    # GATE1_DURABLE_PERSISTENCE_JSON
+    def upsert_customer(self, record: dict[str, Any]) -> dict[str, Any]:
+        return _upsert_json_record(CUSTOMERS_PATH, "customerId", record)
+
+    def upsert_workspace(self, record: dict[str, Any]) -> dict[str, Any]:
+        return _upsert_json_record(WORKSPACES_PATH, "workspaceId", record)
+
+    def upsert_membership(self, record: dict[str, Any]) -> dict[str, Any]:
+        memberships = self.list_memberships()
+        item = dict(record)
+
+        user_id = _clean(item.get("userId"))
+        workspace_id = _clean(item.get("workspaceId"))
+
+        if not user_id:
+            raise ValueError("userId is required")
+
+        if not workspace_id:
+            raise ValueError("workspaceId is required")
+
+        now = _now()
+
+        for index, existing in enumerate(memberships):
+            if (
+                _clean(existing.get("userId")) == user_id
+                and _clean(existing.get("workspaceId")) == workspace_id
+            ):
+                updated = dict(existing)
+                updated.update(item)
+                updated["userId"] = user_id
+                updated["workspaceId"] = workspace_id
+                updated["createdAt"] = existing.get("createdAt") or now
+                updated["updatedAt"] = now
+                memberships[index] = updated
+                _write_json(MEMBERSHIPS_PATH, memberships)
+                return updated
+
+        item["userId"] = user_id
+        item["workspaceId"] = workspace_id
+        item["createdAt"] = item.get("createdAt") or now
+        item["updatedAt"] = now
+        memberships.append(item)
+        _write_json(MEMBERSHIPS_PATH, memberships)
+        return item
+
+    def list_usage_events(
+        self,
+        workspace_id: str | None = None,
+        month: str | None = None,
+    ) -> list[dict[str, Any]]:
+        workspace_id = _clean(workspace_id)
+        month = _clean(month)
+        rows: list[dict[str, Any]] = []
+
+        for record in _read_jsonl(USAGE_EVENTS_PATH):
+            if workspace_id and _clean(record.get("workspaceId")) != workspace_id:
+                continue
+
+            timestamp = _clean(
+                record.get("createdAt")
+                or record.get("timestamp")
+                or record.get("time")
+            )
+
+            if month and timestamp and not timestamp.startswith(month):
+                continue
+
+            rows.append(dict(record))
+
+        return rows
+
+    def _workspace_voice_rows(self) -> list[dict[str, Any]]:
+        data = _read_json(WORKSPACE_VOICES_PATH, [])
+        return [dict(row) for row in data if isinstance(row, dict)] if isinstance(data, list) else []
+
+    def list_workspace_voices(self, workspace_id: str) -> list[dict[str, Any]]:
+        workspace_id = _clean(workspace_id)
+        rows = [
+            row for row in self._workspace_voice_rows()
+            if _clean(row.get("workspaceId")) == workspace_id
+            and _clean(row.get("status"), "active").lower() == "active"
+        ]
+        rows.sort(key=lambda row: _clean(row.get("updatedAt") or row.get("createdAt")), reverse=True)
+        return rows
+
+    def get_workspace_voice(self, workspace_id: str, voice_id: str) -> dict[str, Any] | None:
+        workspace_id = _clean(workspace_id)
+        voice_id = _clean(voice_id)
+        for row in self._workspace_voice_rows():
+            if _clean(row.get("workspaceId")) == workspace_id and _clean(row.get("voiceId")) == voice_id:
+                return dict(row)
+        return None
+
+    def upsert_workspace_voice(
+        self,
+        workspace_id: str,
+        voice_id: str,
+        record: dict[str, Any],
+    ) -> dict[str, Any]:
+        workspace_id = _clean(workspace_id)
+        voice_id = _clean(voice_id)
+        if not workspace_id:
+            raise ValueError("workspaceId is required")
+        if not voice_id:
+            raise ValueError("voiceId is required")
+
+        rows = self._workspace_voice_rows()
+        now = _now()
+        item = dict(record)
+        item["workspaceId"] = workspace_id
+        item["voiceId"] = voice_id
+        item["updatedAt"] = now
+
+        for index, existing in enumerate(rows):
+            if _clean(existing.get("workspaceId")) == workspace_id and _clean(existing.get("voiceId")) == voice_id:
+                updated = dict(existing)
+                updated.update(item)
+                updated["createdAt"] = existing.get("createdAt") or item.get("createdAt") or now
+                rows[index] = updated
+                _write_json(WORKSPACE_VOICES_PATH, rows)
+                return updated
+
+        item["createdAt"] = item.get("createdAt") or now
+        rows.append(item)
+        _write_json(WORKSPACE_VOICES_PATH, rows)
+        return item
+
+    def delete_workspace_voice(self, workspace_id: str, voice_id: str) -> bool:
+        workspace_id = _clean(workspace_id)
+        voice_id = _clean(voice_id)
+        rows = self._workspace_voice_rows()
+        kept = [
+            row for row in rows
+            if not (
+                _clean(row.get("workspaceId")) == workspace_id
+                and _clean(row.get("voiceId")) == voice_id
+            )
+        ]
+        changed = len(kept) != len(rows)
+        if changed:
+            _write_json(WORKSPACE_VOICES_PATH, kept)
+        return changed
+
+    def _system_voice_rows(self) -> list[dict[str, Any]]:
+        data = _read_json(SYSTEM_VOICES_PATH, [])
+        return [dict(row) for row in data if isinstance(row, dict)] if isinstance(data, list) else []
+
+    def list_system_voices(self) -> list[dict[str, Any]]:
+        rows = [
+            row for row in self._system_voice_rows()
+            if _clean(row.get("status"), "active").lower() == "active"
+        ]
+        rows.sort(key=lambda row: _clean(row.get("updatedAt") or row.get("createdAt")), reverse=True)
+        return rows
+
+    def get_system_voice(self, voice_id: str) -> dict[str, Any] | None:
+        voice_id = _clean(voice_id)
+        for row in self._system_voice_rows():
+            if _clean(row.get("voiceId")) == voice_id:
+                return dict(row)
+        return None
+
+    def upsert_system_voice(self, voice_id: str, record: dict[str, Any]) -> dict[str, Any]:
+        voice_id = _clean(voice_id)
+        if not voice_id:
+            raise ValueError("voiceId is required")
+        rows = self._system_voice_rows()
+        now = _now()
+        item = dict(record)
+        item["voiceId"] = voice_id
+        item["updatedAt"] = now
+        for index, existing in enumerate(rows):
+            if _clean(existing.get("voiceId")) == voice_id:
+                updated = dict(existing)
+                updated.update(item)
+                updated["createdAt"] = existing.get("createdAt") or item.get("createdAt") or now
+                rows[index] = updated
+                _write_json(SYSTEM_VOICES_PATH, rows)
+                return updated
+        item["createdAt"] = item.get("createdAt") or now
+        rows.append(item)
+        _write_json(SYSTEM_VOICES_PATH, rows)
+        return item
+
+    def delete_system_voice(self, voice_id: str) -> bool:
+        voice_id = _clean(voice_id)
+        rows = self._system_voice_rows()
+        kept = [row for row in rows if _clean(row.get("voiceId")) != voice_id]
+        changed = len(kept) != len(rows)
+        if changed:
+            _write_json(SYSTEM_VOICES_PATH, kept)
+        return changed
 
     def get_workspace_subscription(self, workspace_id: str) -> dict[str, Any] | None:
         workspace_id = _clean(workspace_id)
@@ -488,6 +771,407 @@ class PostgresPersistenceRepository:
             """
         )
 
+    # GATE1_DURABLE_PERSISTENCE_POSTGRES
+    def upsert_customer(self, record: dict[str, Any]) -> dict[str, Any]:
+        item = dict(record)
+        customer_id = _clean(item.get("customerId"))
+
+        if not customer_id:
+            raise ValueError("customerId is required")
+
+        name = _clean(item.get("name"), customer_id)
+
+        self._execute(
+            """
+            INSERT INTO customers (
+                customer_id,
+                name,
+                billing_email,
+                status,
+                updated_at
+            )
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT (customer_id)
+            DO UPDATE SET
+                name = EXCLUDED.name,
+                billing_email = EXCLUDED.billing_email,
+                status = EXCLUDED.status,
+                updated_at = NOW()
+            """,
+            (
+                customer_id,
+                name,
+                _clean(item.get("billingEmail")),
+                _clean(item.get("status"), "active"),
+            ),
+        )
+
+        for row in self.list_customers():
+            if _clean(row.get("customerId")) == customer_id:
+                return row
+
+        return {
+            "customerId": customer_id,
+            "name": name,
+            "billingEmail": _clean(item.get("billingEmail")),
+            "status": _clean(item.get("status"), "active"),
+        }
+
+    def upsert_workspace(self, record: dict[str, Any]) -> dict[str, Any]:
+        item = dict(record)
+        workspace_id = _clean(item.get("workspaceId"))
+        customer_id = _clean(item.get("customerId"))
+
+        if not workspace_id:
+            raise ValueError("workspaceId is required")
+
+        if not customer_id:
+            raise ValueError("customerId is required")
+
+        self._execute(
+            """
+            INSERT INTO workspaces (
+                workspace_id,
+                customer_id,
+                label,
+                status,
+                subscription_owner_user_id,
+                updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (workspace_id)
+            DO UPDATE SET
+                customer_id = EXCLUDED.customer_id,
+                label = EXCLUDED.label,
+                status = EXCLUDED.status,
+                subscription_owner_user_id =
+                    EXCLUDED.subscription_owner_user_id,
+                updated_at = NOW()
+            """,
+            (
+                workspace_id,
+                customer_id,
+                _clean(item.get("label"), workspace_id),
+                _clean(item.get("status"), "active"),
+                _clean(item.get("subscriptionOwnerUserId")),
+            ),
+        )
+
+        for row in self.list_workspaces():
+            if _clean(row.get("workspaceId")) == workspace_id:
+                return row
+
+        return {
+            "workspaceId": workspace_id,
+            "customerId": customer_id,
+            "label": _clean(item.get("label"), workspace_id),
+            "status": _clean(item.get("status"), "active"),
+            "subscriptionOwnerUserId": _clean(
+                item.get("subscriptionOwnerUserId")
+            ),
+        }
+
+    def upsert_membership(self, record: dict[str, Any]) -> dict[str, Any]:
+        item = dict(record)
+        user_id = _clean(item.get("userId"))
+        workspace_id = _clean(item.get("workspaceId"))
+
+        if not user_id:
+            raise ValueError("userId is required")
+
+        if not workspace_id:
+            raise ValueError("workspaceId is required")
+
+        self._execute(
+            """
+            INSERT INTO workspace_memberships (
+                user_id,
+                workspace_id,
+                role,
+                status,
+                updated_at
+            )
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT (user_id, workspace_id)
+            DO UPDATE SET
+                role = EXCLUDED.role,
+                status = EXCLUDED.status,
+                updated_at = NOW()
+            """,
+            (
+                user_id,
+                workspace_id,
+                _clean(item.get("role"), "member"),
+                _clean(item.get("status"), "active"),
+            ),
+        )
+
+        for row in self.list_memberships():
+            if (
+                _clean(row.get("userId")) == user_id
+                and _clean(row.get("workspaceId")) == workspace_id
+            ):
+                return row
+
+        return {
+            "userId": user_id,
+            "workspaceId": workspace_id,
+            "role": _clean(item.get("role"), "member"),
+            "status": _clean(item.get("status"), "active"),
+        }
+
+    def list_usage_events(
+        self,
+        workspace_id: str | None = None,
+        month: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["1 = 1"]
+        params: list[Any] = []
+
+        workspace_id = _clean(workspace_id)
+        month = _clean(month)
+
+        if workspace_id:
+            clauses.append("workspace_id = %s")
+            params.append(workspace_id)
+
+        if month:
+            clauses.append("to_char(created_at, 'YYYY-MM') = %s")
+            params.append(month)
+
+        rows = self._fetch_all(
+            f"""
+            SELECT
+                id AS "eventId",
+                workspace_id AS "workspaceId",
+                event_type AS "eventType",
+                credits,
+                provider,
+                model,
+                source_id AS "sourceId",
+                output_id AS "outputId",
+                metadata,
+                created_at AS "createdAt"
+            FROM usage_events
+            WHERE {' AND '.join(clauses)}
+            ORDER BY created_at ASC
+            """,
+            tuple(params),
+        )
+
+        results: list[dict[str, Any]] = []
+
+        for row in rows:
+            metadata = row.get("metadata")
+            result = dict(metadata) if isinstance(metadata, dict) else {}
+
+            result.update({
+                "eventId": row.get("eventId"),
+                "workspaceId": row.get("workspaceId"),
+                "eventType": row.get("eventType"),
+                "credits": _to_float(row.get("credits")),
+                "provider": row.get("provider"),
+                "model": row.get("model"),
+                "sourceId": row.get("sourceId"),
+                "outputId": row.get("outputId"),
+                "createdAt": row.get("createdAt"),
+            })
+
+            results.append(result)
+
+        return results
+
+    def list_workspace_voices(self, workspace_id: str) -> list[dict[str, Any]]:
+        return self._fetch_all(
+            """
+            SELECT
+                workspace_id AS "workspaceId",
+                voice_id AS "voiceId",
+                provider_voice_id AS "providerVoiceId",
+                display_name AS "displayName",
+                gender,
+                source_type AS "sourceType",
+                preview_object_key AS "previewObjectKey",
+                preview_content_type AS "previewContentType",
+                status,
+                metadata,
+                created_at AS "createdAt",
+                updated_at AS "updatedAt"
+            FROM workspace_voices
+            WHERE workspace_id = %s AND status = 'active'
+            ORDER BY updated_at DESC
+            """,
+            (_clean(workspace_id),),
+        )
+
+    def get_workspace_voice(self, workspace_id: str, voice_id: str) -> dict[str, Any] | None:
+        rows = self._fetch_all(
+            """
+            SELECT
+                workspace_id AS "workspaceId",
+                voice_id AS "voiceId",
+                provider_voice_id AS "providerVoiceId",
+                display_name AS "displayName",
+                gender,
+                source_type AS "sourceType",
+                preview_object_key AS "previewObjectKey",
+                preview_content_type AS "previewContentType",
+                status,
+                metadata,
+                created_at AS "createdAt",
+                updated_at AS "updatedAt"
+            FROM workspace_voices
+            WHERE workspace_id = %s AND voice_id = %s
+            LIMIT 1
+            """,
+            (_clean(workspace_id), _clean(voice_id)),
+        )
+        return rows[0] if rows else None
+
+    def upsert_workspace_voice(
+        self,
+        workspace_id: str,
+        voice_id: str,
+        record: dict[str, Any],
+    ) -> dict[str, Any]:
+        workspace_id = _clean(workspace_id)
+        voice_id = _clean(voice_id)
+        payload = dict(record)
+        provider_voice_id = _clean(payload.get("providerVoiceId") or payload.get("voiceParameter"))
+        if not workspace_id:
+            raise ValueError("workspaceId is required")
+        if not voice_id:
+            raise ValueError("voiceId is required")
+        if not provider_voice_id:
+            raise ValueError("providerVoiceId is required")
+
+        self._execute(
+            """
+            INSERT INTO workspace_voices (
+                workspace_id, voice_id, provider_voice_id, display_name, gender,
+                source_type, preview_object_key, preview_content_type, status, metadata, updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW())
+            ON CONFLICT (workspace_id, voice_id)
+            DO UPDATE SET
+                provider_voice_id = EXCLUDED.provider_voice_id,
+                display_name = EXCLUDED.display_name,
+                gender = EXCLUDED.gender,
+                source_type = EXCLUDED.source_type,
+                preview_object_key = EXCLUDED.preview_object_key,
+                preview_content_type = EXCLUDED.preview_content_type,
+                status = EXCLUDED.status,
+                metadata = EXCLUDED.metadata,
+                updated_at = NOW()
+            """,
+            (
+                workspace_id,
+                voice_id,
+                provider_voice_id,
+                _clean(payload.get("displayName"), voice_id),
+                _clean(payload.get("gender")),
+                _clean(payload.get("sourceType"), "upload"),
+                _clean(payload.get("previewObjectKey")),
+                _clean(payload.get("previewContentType"), "audio/wav"),
+                _clean(payload.get("status"), "active"),
+                json.dumps(payload.get("metadata") if isinstance(payload.get("metadata"), dict) else payload),
+            ),
+        )
+        result = self.get_workspace_voice(workspace_id, voice_id)
+        if result is None:
+            raise RuntimeError("Workspace voice upsert did not return a record")
+        return result
+
+    def delete_workspace_voice(self, workspace_id: str, voice_id: str) -> bool:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM workspace_voices WHERE workspace_id = %s AND voice_id = %s",
+                    (_clean(workspace_id), _clean(voice_id)),
+                )
+                changed = cur.rowcount > 0
+            conn.commit()
+        return changed
+
+    def list_system_voices(self) -> list[dict[str, Any]]:
+        return self._fetch_all(
+            """
+            SELECT voice_id AS "voiceId", provider_voice_id AS "providerVoiceId",
+                   display_name AS "displayName", gender,
+                   preview_object_key AS "previewObjectKey",
+                   preview_content_type AS "previewContentType", status, metadata,
+                   created_at AS "createdAt", updated_at AS "updatedAt"
+            FROM system_voices
+            WHERE status = 'active'
+            ORDER BY updated_at DESC
+            """
+        )
+
+    def get_system_voice(self, voice_id: str) -> dict[str, Any] | None:
+        rows = self._fetch_all(
+            """
+            SELECT voice_id AS "voiceId", provider_voice_id AS "providerVoiceId",
+                   display_name AS "displayName", gender,
+                   preview_object_key AS "previewObjectKey",
+                   preview_content_type AS "previewContentType", status, metadata,
+                   created_at AS "createdAt", updated_at AS "updatedAt"
+            FROM system_voices
+            WHERE voice_id = %s
+            LIMIT 1
+            """,
+            (_clean(voice_id),),
+        )
+        return rows[0] if rows else None
+
+    def upsert_system_voice(self, voice_id: str, record: dict[str, Any]) -> dict[str, Any]:
+        voice_id = _clean(voice_id)
+        payload = dict(record)
+        provider_voice_id = _clean(payload.get("providerVoiceId") or payload.get("voiceParameter"))
+        if not voice_id:
+            raise ValueError("voiceId is required")
+        if not provider_voice_id:
+            raise ValueError("providerVoiceId is required")
+        self._execute(
+            """
+            INSERT INTO system_voices (
+                voice_id, provider_voice_id, display_name, gender,
+                preview_object_key, preview_content_type, status, metadata, updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW())
+            ON CONFLICT (voice_id)
+            DO UPDATE SET
+                provider_voice_id = EXCLUDED.provider_voice_id,
+                display_name = EXCLUDED.display_name,
+                gender = EXCLUDED.gender,
+                preview_object_key = EXCLUDED.preview_object_key,
+                preview_content_type = EXCLUDED.preview_content_type,
+                status = EXCLUDED.status,
+                metadata = EXCLUDED.metadata,
+                updated_at = NOW()
+            """,
+            (
+                voice_id, provider_voice_id,
+                _clean(payload.get("displayName"), voice_id),
+                _clean(payload.get("gender")),
+                _clean(payload.get("previewObjectKey")),
+                _clean(payload.get("previewContentType"), "audio/wav"),
+                _clean(payload.get("status"), "active"),
+                json.dumps(payload.get("metadata") if isinstance(payload.get("metadata"), dict) else payload),
+            ),
+        )
+        result = self.get_system_voice(voice_id)
+        if result is None:
+            raise RuntimeError("System voice upsert did not return a record")
+        return result
+
+    def delete_system_voice(self, voice_id: str) -> bool:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM system_voices WHERE voice_id = %s", (_clean(voice_id),))
+                changed = cur.rowcount > 0
+            conn.commit()
+        return changed
+
     def get_workspace_subscription(self, workspace_id: str) -> dict[str, Any] | None:
         rows = self._fetch_all(
             """
@@ -633,7 +1317,7 @@ class PostgresPersistenceRepository:
                 record.get("model"),
                 record.get("sourceId") or record.get("source_id"),
                 record.get("outputId") or record.get("output_id"),
-                json.dumps(record.get("metadata") if isinstance(record.get("metadata"), dict) else record),
+                json.dumps(record),
             ),
         )
 

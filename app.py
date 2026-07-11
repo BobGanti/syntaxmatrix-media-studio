@@ -720,7 +720,16 @@ def frontend(path: str):
     if candidate.exists() and candidate.is_file():
         return send_from_directory(FRONTEND_DIR, path)
 
-    # Friendly SPA-style fallback.
+    # API and protected media requests must never fall through to index.html.
+    # Returning JSON here prevents the browser from trying to parse HTML as an
+    # API response when a route is missing or deployed under the wrong image.
+    if path.startswith("api/"):
+        return _json_error(f"API endpoint not found: /{path}", 404)
+
+    if path.startswith("media/"):
+        return _json_error(f"Media asset not found: /{path}", 404)
+
+    # Friendly SPA-style fallback for browser pages only.
     return send_from_directory(FRONTEND_DIR, "index.html")
 
 @app.errorhandler(413)
@@ -729,8 +738,19 @@ def upload_too_large(_exc):
 
 @app.errorhandler(Exception)
 def unhandled(exc):
+    from werkzeug.exceptions import HTTPException
+
+    # API callers must never receive an HTML error document. Preserve known HTTP
+    # status codes and convert the response to the JSON contract used by the UI.
+    if isinstance(exc, HTTPException):
+        status_code = int(exc.code or 500)
+        message = str(exc.description or exc.name or "Request failed.")
+        if request.path.startswith("/api/"):
+            return _json_error(message, status_code)
+        return exc
+
     traceback.print_exc()
-    return _json_error(str(exc), 500)
+    return _json_error("The server could not complete the request.", 500)
 
 
 
@@ -1849,6 +1869,9 @@ def _stage9f3_workspace_id_required_path(path: str) -> bool:
     exact = {
         "/api/clone-voice/my-voices",
         "/api/clone-voice/voices/from-source",
+        "/api/clone-voice/source-uploads/workspace/session",
+        "/api/clone-voice/source-uploads/workspace/complete",
+        "/api/clone-voice/source-uploads/workspace/replace",
         "/api/clone-voice/from-saved",
         "/api/clone-voice/from-system",
         "/api/billing/usage",

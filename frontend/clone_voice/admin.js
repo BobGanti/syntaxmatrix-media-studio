@@ -30,11 +30,56 @@
       .replaceAll("'", "&#039;");
   }
 
+  async function parseApiResponse(response) {
+    const raw = await response.text();
+    if (!raw.trim()) return {};
+    try {
+      return JSON.parse(raw);
+    } catch (_error) {
+      const plain = raw.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 240);
+      throw new Error(`Server returned HTTP ${response.status} ${response.statusText || ""} instead of JSON${plain ? `: ${plain}` : ""}`.trim());
+    }
+  }
+
+  async function createSystemUploadSession(file) {
+    const response = await fetch("/api/clone-voice/source-uploads/system/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: file.name || "system_voice.wav",
+        contentType: file.type || "application/octet-stream",
+        sizeBytes: file.size
+      })
+    });
+    const data = await parseApiResponse(response);
+    if (!response.ok || !data.ok || !data.uploadUrl || !data.objectKey) {
+      throw new Error(data.message || data.error || "Could not create a system-voice upload session");
+    }
+    return data;
+  }
+
+  async function putSystemVoiceFile(session, file) {
+    const response = await fetch(session.uploadUrl, {
+      method: session.method || "PUT",
+      headers: { "Content-Type": session.contentType || file.type || "application/octet-stream" },
+      body: file,
+      credentials: "omit",
+      cache: "no-store"
+    });
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => "")).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 240);
+      throw new Error(`Direct storage upload failed with HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+    }
+  }
+
   function durationStatus(data, message) {
+    const rawDurationLimit = Number(data.maxRawSourceSeconds || 0);
     durationStatusBox.innerHTML = `
       <strong>${escapeHtml(message)}</strong><br>
-      Current D: ${escapeHtml(data.maxVoiceSourceSeconds)} seconds<br>
-      Allowed range: ${escapeHtml(data.minSeconds)}–${escapeHtml(data.maxSeconds)} seconds<br>
+      Target D: ${escapeHtml(data.maxVoiceSourceSeconds)} seconds<br>
+      Automatic backend trimming: ${data.autoTrimVoiceSource === false ? "Disabled" : "Enabled"}<br>
+      Raw upload safety limit: ${escapeHtml(data.maxRawUploadMb)} MB<br>
+      Raw duration safety limit: ${rawDurationLimit > 0 ? `${rawDurationLimit} seconds` : "Disabled"}<br>
       Config: ${escapeHtml(data.configPath)}
     `;
   }
@@ -44,14 +89,14 @@
 
     try {
       const response = await fetch(`/api/clone-voice/settings?t=${Date.now()}`, { cache: "no-store" });
-      const data = await response.json();
+      const data = await parseApiResponse(response);
 
       if (!response.ok || !data.ok) {
         throw new Error(data.message || data.error || "Could not load settings");
       }
 
-      durationInput.min = data.minSeconds || 5;
-      durationInput.max = data.maxSeconds || 120;
+      durationInput.removeAttribute("min");
+      durationInput.removeAttribute("max");
       durationInput.value = data.maxVoiceSourceSeconds || 20;
       durationStatus(data, "Setting loaded.");
     } catch (error) {
@@ -72,7 +117,7 @@
         body: JSON.stringify({ maxVoiceSourceSeconds: Number(durationInput.value) })
       });
 
-      const data = await response.json();
+      const data = await parseApiResponse(response);
 
       if (!response.ok || !data.ok) {
         throw new Error(data.message || data.error || "Could not save settings");
@@ -125,7 +170,7 @@
 
     try {
       const response = await fetch(`/api/clone-voice/system-voices?t=${Date.now()}`, { cache: "no-store" });
-      const data = await response.json();
+      const data = await parseApiResponse(response);
 
       if (!response.ok || !data.ok) {
         throw new Error(data.message || data.error || "Could not load system voices");
@@ -152,45 +197,35 @@
 
     const file = systemVoiceAudio.files[0];
     const displayName = systemVoiceDisplayName.value.trim();
-
-    if (!file) {
-      alert("Choose a system voice source audio file.");
-      return;
-    }
-
-    if (!displayName) {
-      alert("Enter a display name.");
-      return;
-    }
-
+    if (!file) return alert("Choose a system voice source audio file.");
+    if (!displayName) return alert("Enter a display name.");
     if (systemVoiceGender.value !== "M" && systemVoiceGender.value !== "F") {
-      alert("Choose system voice gender: Male (M) or Female (F).");
       systemVoiceGender.focus();
-      return;
+      return alert("Choose system voice gender: Male (M) or Female (F).");
     }
-
-    const formData = new FormData();
-    formData.append("audio", file, file.name);
-    formData.append("displayName", displayName);
-    formData.append("gender", systemVoiceGender.value);
-    formData.append("replace", replaceSystemVoice.checked ? "true" : "false");
 
     saveSystemVoiceBtn.disabled = true;
     saveSystemVoiceBtn.textContent = "Creating...";
-    systemVoiceStatusBox.textContent = "Creating system voice parameter and standard preview...";
+    systemVoiceStatusBox.textContent = "Uploading system voice source directly to secure storage...";
 
     try {
-      const response = await fetch("/api/clone-voice/system-voices", {
+      const session = await createSystemUploadSession(file);
+      await putSystemVoiceFile(session, file);
+      systemVoiceStatusBox.textContent = "Upload complete. The backend is checking duration, trimming to D when required, and creating the standard preview...";
+      const response = await fetch("/api/clone-voice/source-uploads/system/complete", {
         method: "POST",
-        body: formData
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          objectKey: session.objectKey,
+          originalFilename: file.name,
+          sizeBytes: file.size,
+          displayName,
+          gender: systemVoiceGender.value,
+          replace: replaceSystemVoice.checked
+        })
       });
-
-      const data = await response.json();
-
-      if (!response.ok || !data.ok) {
-        throw new Error(data.message || data.error || "Could not create system voice");
-      }
-
+      const data = await parseApiResponse(response);
+      if (!response.ok || !data.ok) throw new Error(data.message || data.error || "Could not create system voice");
       systemVoiceStatus(data, data.replaced ? "System voice replaced." : "System voice created.");
       systemVoiceAudio.value = "";
       await loadSystemVoices();
@@ -221,7 +256,7 @@
         method: "DELETE"
       });
 
-      const data = await response.json();
+      const data = await parseApiResponse(response);
 
       if (!response.ok || !data.ok) {
         throw new Error(data.message || data.error || "Could not delete system voice");

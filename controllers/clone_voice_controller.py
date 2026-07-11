@@ -1,19 +1,27 @@
 from __future__ import annotations
 
+import pathlib
+
 from flask import Response, jsonify, request, send_from_directory
 
 from services.clone_voice_audio_policy import (
-    get_max_voice_source_seconds,
-    limit_audio_to_max_seconds,
-    normalize_generated_audio_file,
+    VoiceSourcePolicyError,
     apply_narration_speed_to_file,
+    get_max_voice_source_seconds,
     narration_speed_payload,
+    normalize_generated_audio_file,
+    prepare_voice_source_audio,
     settings_payload,
     set_max_voice_source_seconds,
 )
 from services.clone_voice_provider import create_voice_parameter, generate_narration_to_file
 from services.clone_voice_style import generate_narration_to_file_with_style
-from services.auth_context import auth_context_from_request
+from services.auth_context import (
+    AuthError,
+    auth_context_from_request,
+    auth_error_payload,
+    require_admin,
+)
 from services.customer_workspace import workspace_selector_payload
 from services.billing_provider import (
     BillingProviderError,
@@ -42,7 +50,17 @@ from services.clone_voice_system import (
     delete_system_voice,
     list_system_voices_payload,
     load_system_voice_parameter,
+    save_system_voice_from_path,
     save_system_voice_from_source,
+)
+from services.voice_source_ingestion import (
+    VoiceSourceUploadError,
+    create_system_upload_session,
+    create_workspace_upload_session,
+    delete_temporary_upload,
+    download_completed_upload,
+    system_temporary_prefix,
+    workspace_temporary_prefix,
 )
 from services.clone_voice_workspace import (
     MOCK_WORKSPACE_ID,
@@ -168,6 +186,190 @@ def _generate_standard_preview(voice_parameter: str, preview_path):
     print("[clone_voice_controller] Generating standard synthesized voice preview:", preview_path, flush=True)
     generate_narration_to_file(voice_parameter, STANDARD_VOICE_PREVIEW_TEXT, preview_path)
     normalize_generated_audio_file(preview_path)
+
+
+
+def _request_origin() -> str:
+    return (request.headers.get("Origin") or f"{request.scheme}://{request.host}").rstrip("/")
+
+
+def _admin_context_or_response():
+    try:
+        ctx = auth_context_from_request(request)
+        require_admin(ctx)
+        return ctx, None
+    except AuthError as exc:
+        return None, (jsonify(auth_error_payload(exc)), exc.status_code)
+
+
+def _create_workspace_voice_from_path(
+    *,
+    workspace_id: str,
+    source_mode: str,
+    source_path: pathlib.Path,
+    original_filename: str,
+    display_name_input: str,
+    gender: str,
+) -> dict:
+    source_mode = str(source_mode or "upload").strip().lower()
+    if source_mode not in {"upload", "record"}:
+        raise ValueError("Voice creation only supports upload or record source mode")
+
+    gender = normalize_gender(gender)
+    if gender not in {"M", "F"}:
+        raise ValueError("Voice gender is required. Choose Male (M) or Female (F).")
+
+    source_path = pathlib.Path(source_path)
+    if not source_path.exists() or source_path.stat().st_size <= 0:
+        raise ValueError("Voice source audio is missing or empty.")
+
+    is_recording = source_mode == "record"
+    workspace = get_workspace(workspace_id)
+    voice_id = new_recorded_voice_id() if is_recording else voice_id_from_source_filename(original_filename)
+    display_name = display_name_input or display_name_from_voice_id(voice_id)
+    preview_path = stable_preview_path(workspace, voice_id)
+    limited_source_path = source_limited_path(workspace, voice_id)
+    prepared_source = None
+
+    try:
+        existing_parameter = voice_parameter_exists(workspace, voice_id)
+        parameter_created = False
+        preview_created = False
+
+        if is_recording or not existing_parameter:
+            assert_workspace_can_spend(workspace.workspace_id, "voice.parameter.saved", quantity=1)
+
+        if existing_parameter and not is_recording:
+            voice_parameter, param_path = load_workspace_voice_parameter(workspace, voice_id)
+        else:
+            prepared_source = prepare_voice_source_audio(
+                input_path=source_path,
+                output_path=limited_source_path,
+            )
+            voice_parameter = create_voice_parameter(pathlib.Path(prepared_source["path"]))
+            voice_id, param_path = save_voice_parameter(workspace, voice_parameter, voice_id)
+            parameter_created = True
+
+        metadata_before = load_voice_metadata(workspace, voice_id)
+        preview_is_standard = (
+            preview_path.exists()
+            and metadata_before.get("previewKind") == "standard_synthesized"
+        )
+
+        if is_recording or not preview_is_standard:
+            _generate_standard_preview(voice_parameter, preview_path)
+            preview_created = True
+
+        metadata, metadata_path = save_voice_metadata(
+            workspace,
+            voice_id,
+            display_name,
+            gender,
+            source_type="record" if is_recording else "upload",
+            parameter_path=param_path,
+            preview_path=preview_path,
+            parameter_created=parameter_created,
+            preview_created=preview_created,
+        )
+
+        return {
+            "ok": True,
+            "operation": "create_voice",
+            "message": "Voice saved. Select it from My saved voices to generate narration.",
+            "sourceType": "record" if is_recording else "upload",
+            "workspaceId": workspace.workspace_id,
+            "voiceId": voice_id,
+            "displayName": metadata["displayName"],
+            "gender": metadata["gender"],
+            "label": metadata["label"],
+            "voiceParamPath": relative_to_root(param_path),
+            "voicePreviewPath": relative_to_root(preview_path),
+            "voicePreviewUrl": workspace_voice_preview_url(workspace, preview_path),
+            "voiceMetadataPath": relative_to_root(metadata_path),
+            "previewText": STANDARD_VOICE_PREVIEW_TEXT,
+            "parameterCreated": parameter_created,
+            "previewCreated": preview_created,
+            "maxVoiceSourceSeconds": get_max_voice_source_seconds(),
+            "sourceDurationSeconds": prepared_source.get("durationSeconds") if prepared_source else None,
+            "sourceTrimmed": bool(prepared_source and prepared_source.get("trimmed")),
+            "autoTrimVoiceSource": bool(prepared_source.get("autoTrimEnabled")) if prepared_source else None,
+            "rawSourceDeleted": True,
+        }
+    finally:
+        delete_if_exists(limited_source_path)
+
+
+def _replace_workspace_voice_from_path(
+    *,
+    workspace_id: str,
+    voice_id: str,
+    source_path: pathlib.Path,
+    original_filename: str,
+    display_name_input: str,
+    gender_input: str,
+) -> dict:
+    workspace = get_workspace(workspace_id)
+    _, old_param_path = load_workspace_voice_parameter(workspace, voice_id)
+    existing = load_voice_metadata(workspace, voice_id)
+
+    display_name = (
+        display_name_input
+        or existing.get("displayName")
+        or display_name_from_voice_id(voice_id)
+    ).strip()
+    gender = normalize_gender(gender_input or existing.get("gender"))
+    if gender not in {"M", "F"}:
+        raise ValueError("Voice gender is required. Choose Male (M) or Female (F).")
+
+    assert_workspace_can_spend(workspace.workspace_id, "voice.parameter.saved", quantity=1)
+    limited_source_path = source_limited_path(workspace, voice_id)
+
+    try:
+        prepared_source = prepare_voice_source_audio(
+            input_path=pathlib.Path(source_path),
+            output_path=limited_source_path,
+        )
+        voice_parameter = create_voice_parameter(pathlib.Path(prepared_source["path"]))
+        voice_id, param_path = save_voice_parameter(workspace, voice_parameter, voice_id)
+        preview_path = stable_preview_path(workspace, voice_id)
+        _generate_standard_preview(voice_parameter, preview_path)
+
+        metadata, metadata_path = save_voice_metadata(
+            workspace,
+            voice_id,
+            display_name,
+            gender,
+            source_type=existing.get("sourceType") or "upload",
+            parameter_path=param_path,
+            preview_path=preview_path,
+            parameter_created=True,
+            preview_created=True,
+        )
+
+        return {
+            "ok": True,
+            "operation": "replace_voice_source",
+            "workspaceId": workspace.workspace_id,
+            "voiceId": voice_id,
+            "displayName": metadata["displayName"],
+            "gender": metadata["gender"],
+            "label": metadata["label"],
+            "voiceParamPath": relative_to_root(param_path),
+            "oldVoiceParamPath": relative_to_root(old_param_path),
+            "voicePreviewPath": relative_to_root(preview_path),
+            "voicePreviewUrl": workspace_voice_preview_url(workspace, preview_path),
+            "voiceMetadataPath": relative_to_root(metadata_path),
+            "maxVoiceSourceSeconds": get_max_voice_source_seconds(),
+            "sourceDurationSeconds": prepared_source.get("durationSeconds"),
+            "sourceTrimmed": bool(prepared_source.get("trimmed")),
+            "autoTrimVoiceSource": bool(prepared_source.get("autoTrimEnabled")),
+            "parameterCreated": True,
+            "previewCreated": True,
+            "message": "Saved voice source replaced. Parameter and standard preview rebuilt.",
+            "originalFilename": original_filename,
+        }
+    finally:
+        delete_if_exists(limited_source_path)
 
 
 def register_clone_voice_routes(app):
@@ -364,6 +566,164 @@ def register_clone_voice_routes(app):
                 **payload,
             })
 
+    if "clone_voice_workspace_upload_session" not in app.view_functions:
+        @app.post("/api/clone-voice/source-uploads/workspace/session", endpoint="clone_voice_workspace_upload_session")
+        def clone_voice_workspace_upload_session():
+            data = request.get_json(silent=True) or {}
+            try:
+                ctx = auth_context_from_request(request)
+                payload = create_workspace_upload_session(
+                    workspace_id=data.get("workspaceId"),
+                    filename=data.get("filename"),
+                    content_type=data.get("contentType"),
+                    size_bytes=data.get("sizeBytes"),
+                    origin=_request_origin(),
+                    user_id=ctx.user_id,
+                    purpose=data.get("purpose") or "create",
+                )
+                return jsonify(payload)
+            except VoiceSourceUploadError as exc:
+                return _error(str(exc), getattr(exc, "status_code", 400))
+            except Exception as exc:
+                print("[clone_voice_controller] workspace upload session error:", repr(exc), flush=True)
+                return _error(str(exc), 500)
+
+    if "clone_voice_workspace_upload_complete" not in app.view_functions:
+        @app.post("/api/clone-voice/source-uploads/workspace/complete", endpoint="clone_voice_workspace_upload_complete")
+        def clone_voice_workspace_upload_complete():
+            data = request.get_json(silent=True) or {}
+            workspace_id = str(data.get("workspaceId") or "").strip()
+            object_key = str(data.get("objectKey") or "").strip()
+            temp_dir = None
+            try:
+                uploaded, local_path, temp_dir = download_completed_upload(
+                    object_key=object_key,
+                    expected_prefix=workspace_temporary_prefix(workspace_id),
+                    original_filename=data.get("originalFilename") or data.get("filename"),
+                    expected_size_bytes=data.get("sizeBytes"),
+                )
+                payload = _create_workspace_voice_from_path(
+                    workspace_id=workspace_id,
+                    source_mode=data.get("sourceMode") or "upload",
+                    source_path=local_path,
+                    original_filename=uploaded.original_filename,
+                    display_name_input=str(data.get("voiceDisplayName") or data.get("displayName") or "").strip(),
+                    gender=str(data.get("gender") or "").strip(),
+                )
+                payload["temporaryObjectDeleted"] = True
+                return jsonify(payload)
+            except QuotaExceededError as exc:
+                return _quota_error_response(exc)
+            except (VoiceSourceUploadError, VoiceSourcePolicyError, ValueError) as exc:
+                return _error(str(exc), getattr(exc, "status_code", 422 if isinstance(exc, VoiceSourcePolicyError) else 400))
+            except Exception as exc:
+                print("[clone_voice_controller] workspace upload completion error:", repr(exc), flush=True)
+                return _error(str(exc), 500)
+            finally:
+                if temp_dir is not None:
+                    temp_dir.cleanup()
+                if object_key:
+                    delete_temporary_upload(object_key)
+
+    if "clone_voice_workspace_replace_upload_complete" not in app.view_functions:
+        @app.post("/api/clone-voice/source-uploads/workspace/replace", endpoint="clone_voice_workspace_replace_upload_complete")
+        def clone_voice_workspace_replace_upload_complete():
+            data = request.get_json(silent=True) or {}
+            workspace_id = str(data.get("workspaceId") or "").strip()
+            object_key = str(data.get("objectKey") or "").strip()
+            voice_id = str(data.get("voiceId") or "").strip()
+            temp_dir = None
+            try:
+                if not voice_id:
+                    return _error("voiceId is required.", 400)
+                uploaded, local_path, temp_dir = download_completed_upload(
+                    object_key=object_key,
+                    expected_prefix=workspace_temporary_prefix(workspace_id),
+                    original_filename=data.get("originalFilename") or data.get("filename"),
+                    expected_size_bytes=data.get("sizeBytes"),
+                )
+                payload = _replace_workspace_voice_from_path(
+                    workspace_id=workspace_id,
+                    voice_id=voice_id,
+                    source_path=local_path,
+                    original_filename=uploaded.original_filename,
+                    display_name_input=str(data.get("displayName") or data.get("voiceDisplayName") or "").strip(),
+                    gender_input=str(data.get("gender") or "").strip(),
+                )
+                payload["temporaryObjectDeleted"] = True
+                return jsonify(payload)
+            except QuotaExceededError as exc:
+                return _quota_error_response(exc)
+            except (VoiceSourceUploadError, VoiceSourcePolicyError, ValueError) as exc:
+                return _error(str(exc), getattr(exc, "status_code", 422 if isinstance(exc, VoiceSourcePolicyError) else 400))
+            except Exception as exc:
+                print("[clone_voice_controller] replacement upload completion error:", repr(exc), flush=True)
+                return _error(str(exc), 500)
+            finally:
+                if temp_dir is not None:
+                    temp_dir.cleanup()
+                if object_key:
+                    delete_temporary_upload(object_key)
+
+    if "clone_voice_system_upload_session" not in app.view_functions:
+        @app.post("/api/clone-voice/source-uploads/system/session", endpoint="clone_voice_system_upload_session")
+        def clone_voice_system_upload_session():
+            ctx, auth_response = _admin_context_or_response()
+            if auth_response is not None:
+                return auth_response
+            data = request.get_json(silent=True) or {}
+            try:
+                return jsonify(create_system_upload_session(
+                    filename=data.get("filename"),
+                    content_type=data.get("contentType"),
+                    size_bytes=data.get("sizeBytes"),
+                    origin=_request_origin(),
+                    user_id=ctx.user_id,
+                ))
+            except VoiceSourceUploadError as exc:
+                return _error(str(exc), getattr(exc, "status_code", 400))
+            except Exception as exc:
+                print("[clone_voice_controller] system upload session error:", repr(exc), flush=True)
+                return _error(str(exc), 500)
+
+    if "clone_voice_system_upload_complete" not in app.view_functions:
+        @app.post("/api/clone-voice/source-uploads/system/complete", endpoint="clone_voice_system_upload_complete")
+        def clone_voice_system_upload_complete():
+            _ctx, auth_response = _admin_context_or_response()
+            if auth_response is not None:
+                return auth_response
+            data = request.get_json(silent=True) or {}
+            object_key = str(data.get("objectKey") or "").strip()
+            temp_dir = None
+            try:
+                uploaded, local_path, temp_dir = download_completed_upload(
+                    object_key=object_key,
+                    expected_prefix=system_temporary_prefix(),
+                    original_filename=data.get("originalFilename") or data.get("filename"),
+                    expected_size_bytes=data.get("sizeBytes"),
+                )
+                payload = save_system_voice_from_path(
+                    local_path,
+                    original_filename=uploaded.original_filename,
+                    display_name=str(data.get("displayName") or "").strip(),
+                    gender=normalize_gender(data.get("gender")),
+                    replace=bool(data.get("replace")),
+                )
+                payload["temporaryObjectDeleted"] = True
+                return jsonify(payload)
+            except FileExistsError as exc:
+                return _error(str(exc), 409)
+            except (VoiceSourceUploadError, VoiceSourcePolicyError, ValueError) as exc:
+                return _error(str(exc), getattr(exc, "status_code", 422 if isinstance(exc, VoiceSourcePolicyError) else 400))
+            except Exception as exc:
+                print("[clone_voice_controller] system upload completion error:", repr(exc), flush=True)
+                return _error(str(exc), 500)
+            finally:
+                if temp_dir is not None:
+                    temp_dir.cleanup()
+                if object_key:
+                    delete_temporary_upload(object_key)
+
     if "clone_voice_system_voices" not in app.view_functions:
         @app.get("/api/clone-voice/system-voices", endpoint="clone_voice_system_voices")
         def system_voices():
@@ -375,6 +735,9 @@ def register_clone_voice_routes(app):
     if "clone_voice_create_system_voice" not in app.view_functions:
         @app.post("/api/clone-voice/system-voices", endpoint="clone_voice_create_system_voice")
         def create_system_voice():
+            _ctx, auth_response = _admin_context_or_response()
+            if auth_response is not None:
+                return auth_response
             audio_file = request.files.get("audio")
             display_name = (
                 request.form.get("displayName", "")
@@ -414,6 +777,9 @@ def register_clone_voice_routes(app):
     if "clone_voice_delete_system_voice" not in app.view_functions:
         @app.delete("/api/clone-voice/system-voices/<voice_id>", endpoint="clone_voice_delete_system_voice")
         def remove_system_voice(voice_id: str):
+            _ctx, auth_response = _admin_context_or_response()
+            if auth_response is not None:
+                return auth_response
             try:
                 payload = delete_system_voice(voice_id)
                 print("[clone_voice_controller] System voice deleted:", payload, flush=True)
@@ -534,13 +900,11 @@ def register_clone_voice_routes(app):
                 else:
                     limited_source_path = source_limited_path(workspace, voice_id)
 
-                    limit_audio_to_max_seconds(
+                    prepared_source = prepare_voice_source_audio(
                         input_path=raw_source_path,
                         output_path=limited_source_path,
-                        max_seconds=max_seconds,
                     )
-
-                    voice_parameter = create_voice_parameter(limited_source_path, "audio/wav")
+                    voice_parameter = create_voice_parameter(pathlib.Path(prepared_source["path"]))
                     voice_id, param_path = save_voice_parameter(workspace, voice_parameter, voice_id)
                     parameter_created = True
 
@@ -589,6 +953,8 @@ def register_clone_voice_routes(app):
                     "rawSourceDeleted": True,
                 })
 
+            except VoiceSourcePolicyError as exc:
+                return _error(str(exc), getattr(exc, "status_code", 422))
             except Exception as exc:
                 print("[clone_voice_controller] create workspace voice error:", repr(exc), flush=True)
                 return _error(str(exc), 500)
@@ -704,13 +1070,11 @@ def register_clone_voice_routes(app):
                 raw_source_path = save_source_audio(audio_file, workspace)
                 limited_source_path = source_limited_path(workspace, voice_id)
 
-                limit_audio_to_max_seconds(
+                prepared_source = prepare_voice_source_audio(
                     input_path=raw_source_path,
                     output_path=limited_source_path,
-                    max_seconds=max_seconds,
                 )
-
-                voice_parameter = create_voice_parameter(limited_source_path, "audio/wav")
+                voice_parameter = create_voice_parameter(pathlib.Path(prepared_source["path"]))
                 voice_id, param_path = save_voice_parameter(workspace, voice_parameter, voice_id)
 
                 preview_path = stable_preview_path(workspace, voice_id)
@@ -751,6 +1115,8 @@ def register_clone_voice_routes(app):
 
                 return jsonify(payload)
 
+            except VoiceSourcePolicyError as exc:
+                return _error(str(exc), getattr(exc, "status_code", 422))
             except Exception as exc:
                 print("[clone_voice_controller] replace saved voice source error:", repr(exc), flush=True)
                 return _error(str(exc), 500)
@@ -928,4 +1294,19 @@ def register_clone_voice_routes(app):
     if "clone_voice_preview_audio" not in app.view_functions:
         @app.get("/media/voices/previews/<path:filename>", endpoint="clone_voice_preview_audio")
         def preview_audio(filename: str):
+            try:
+                from services.object_storage import get_object_storage, object_key_for_system_voice_preview
+                storage = get_object_storage()
+                key = object_key_for_system_voice_preview(filename)
+                if storage.exists(key):
+                    return Response(
+                        storage.read_bytes(key),
+                        mimetype="audio/wav",
+                        headers={
+                            "Cache-Control": "private, max-age=3600",
+                            "X-SyntaxMatrix-Object-Storage": storage.backend_name,
+                        },
+                    )
+            except Exception as exc:
+                print("[clone_voice_controller] System preview object read failed:", repr(exc), flush=True)
             return send_from_directory(SYSTEM_PREVIEWS_DIR, filename)

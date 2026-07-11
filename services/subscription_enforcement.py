@@ -40,6 +40,8 @@ NARRATION_PATHS = {
 
 VOICE_PARAMETER_PATHS = {
     "/api/clone-voice/voices/from-source",
+    "/api/clone-voice/source-uploads/workspace/complete",
+    "/api/clone-voice/source-uploads/workspace/replace",
 }
 
 

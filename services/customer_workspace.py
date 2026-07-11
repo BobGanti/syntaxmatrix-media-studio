@@ -5,8 +5,9 @@ import hashlib
 import json
 import os
 import pathlib
-import re
 from typing import Any
+
+from services.persistence_repository import get_persistence_repository
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -96,68 +97,58 @@ def _clean(value: Any, fallback: str = "") -> str:
     return text or fallback
 
 
-def _ensure_dir() -> None:
-    BILLING_DIR.mkdir(parents=True, exist_ok=True)
+def _repository():
+    return get_persistence_repository()
 
 
-def _write_if_missing(path: pathlib.Path, rows: list[dict[str, Any]]) -> None:
-    _ensure_dir()
-
+def _write_json_if_missing(
+    path: pathlib.Path,
+    rows: list[dict[str, Any]],
+) -> None:
     if path.exists():
         return
 
-    seeded = []
+    path.parent.mkdir(parents=True, exist_ok=True)
+    seeded: list[dict[str, Any]] = []
 
     for row in rows:
         item = dict(row)
-        if not item.get("createdAt"):
-            item["createdAt"] = _now()
+        item["createdAt"] = item.get("createdAt") or _now()
         seeded.append(item)
 
     path.write_text(json.dumps(seeded, indent=2), encoding="utf-8")
 
 
 def ensure_customer_workspace_files() -> None:
-    _write_if_missing(CUSTOMERS_PATH, DEFAULT_CUSTOMERS)
-    _write_if_missing(WORKSPACES_PATH, DEFAULT_WORKSPACES)
-    _write_if_missing(MEMBERSHIPS_PATH, DEFAULT_MEMBERSHIPS)
+    """Seed mock data only for the explicit JSON development backend."""
+    if _repository().backend_name != "json":
+        return
 
-
-def _read_list(path: pathlib.Path, default_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    ensure_customer_workspace_files()
-
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, list):
-            return [dict(row) for row in data if isinstance(row, dict)]
-    except Exception as exc:
-        print("[customer_workspace] Could not read", path, repr(exc), flush=True)
-
-    return [dict(row) for row in default_rows]
-
-
-def _write_list(path: pathlib.Path, rows: list[dict[str, Any]]) -> None:
-    _ensure_dir()
-    path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    _write_json_if_missing(CUSTOMERS_PATH, DEFAULT_CUSTOMERS)
+    _write_json_if_missing(WORKSPACES_PATH, DEFAULT_WORKSPACES)
+    _write_json_if_missing(MEMBERSHIPS_PATH, DEFAULT_MEMBERSHIPS)
 
 
 def list_customers() -> list[dict[str, Any]]:
-    return _read_list(CUSTOMERS_PATH, DEFAULT_CUSTOMERS)
+    ensure_customer_workspace_files()
+    return _repository().list_customers()
 
 
 def list_workspaces() -> list[dict[str, Any]]:
-    return _read_list(WORKSPACES_PATH, DEFAULT_WORKSPACES)
+    ensure_customer_workspace_files()
+    return _repository().list_workspaces()
 
 
 def list_memberships() -> list[dict[str, Any]]:
-    return _read_list(MEMBERSHIPS_PATH, DEFAULT_MEMBERSHIPS)
+    ensure_customer_workspace_files()
+    return _repository().list_memberships()
 
 
 def get_workspace_record(workspace_id: str) -> dict[str, Any] | None:
     workspace_id = _clean(workspace_id)
 
     for workspace in list_workspaces():
-        if workspace.get("workspaceId") == workspace_id:
+        if _clean(workspace.get("workspaceId")) == workspace_id:
             return workspace
 
     return None
@@ -167,7 +158,7 @@ def get_customer_record(customer_id: str) -> dict[str, Any] | None:
     customer_id = _clean(customer_id)
 
     for customer in list_customers():
-        if customer.get("customerId") == customer_id:
+        if _clean(customer.get("customerId")) == customer_id:
             return customer
 
     return None
@@ -179,19 +170,21 @@ def user_workspace_memberships(user_id: str) -> list[dict[str, Any]]:
     return [
         membership
         for membership in list_memberships()
-        if membership.get("userId") == user_id and membership.get("status", "active") == "active"
+        if (
+            _clean(membership.get("userId")) == user_id
+            and _clean(membership.get("status"), "active").lower() == "active"
+        )
     ]
 
 
 def user_has_workspace_access(user_id: str, workspace_id: str) -> bool:
-    user_id = _clean(user_id)
     workspace_id = _clean(workspace_id)
 
-    if not user_id or not workspace_id:
+    if not _clean(user_id) or not workspace_id:
         return False
 
     return any(
-        membership.get("workspaceId") == workspace_id
+        _clean(membership.get("workspaceId")) == workspace_id
         for membership in user_workspace_memberships(user_id)
     )
 
@@ -200,7 +193,7 @@ def workspace_label(workspace_id: str) -> str:
     workspace = get_workspace_record(workspace_id)
 
     if workspace:
-        return workspace.get("label") or workspace_id
+        return _clean(workspace.get("label"), workspace_id)
 
     return workspace_id
 
@@ -210,7 +203,11 @@ def _auth_provider() -> str:
 
 
 def _firebase_auth_mode() -> bool:
-    return _auth_provider() in {"firebase", "identity_platform", "google_identity_platform"}
+    return _auth_provider() in {
+        "firebase",
+        "identity_platform",
+        "google_identity_platform",
+    }
 
 
 def _workspace_payload_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -222,7 +219,11 @@ def _workspace_payload_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def visible_workspaces_for_user(user_id: str, role: str, fallback_workspace_id: str = "mock_user_001") -> list[dict[str, Any]]:
+def visible_workspaces_for_user(
+    user_id: str,
+    role: str,
+    fallback_workspace_id: str = "mock_user_001",
+) -> list[dict[str, Any]]:
     role = _clean(role, "client").lower()
     user_id = _clean(user_id)
     fallback_workspace_id = _clean(fallback_workspace_id)
@@ -233,34 +234,62 @@ def visible_workspaces_for_user(user_id: str, role: str, fallback_workspace_id: 
         return [
             _workspace_payload_row(row)
             for row in workspaces
-            if row.get("status", "active") == "active"
+            if _clean(row.get("status"), "active").lower() == "active"
         ]
 
     allowed_ids = {
-        membership.get("workspaceId")
+        _clean(membership.get("workspaceId"))
         for membership in user_workspace_memberships(user_id)
-        if membership.get("workspaceId")
+        if _clean(membership.get("workspaceId"))
     }
 
-    # Local development fallback only. Firebase/production users must have explicit membership.
-    if not allowed_ids and fallback_workspace_id and not _firebase_auth_mode():
+    if (
+        not allowed_ids
+        and fallback_workspace_id
+        and not _firebase_auth_mode()
+        and _repository().backend_name == "json"
+    ):
         allowed_ids.add(fallback_workspace_id)
 
     return [
         _workspace_payload_row(row)
         for row in workspaces
-        if row.get("workspaceId") in allowed_ids and row.get("status", "active") == "active"
+        if (
+            _clean(row.get("workspaceId")) in allowed_ids
+            and _clean(row.get("status"), "active").lower() == "active"
+        )
     ]
 
 
-def workspace_selector_payload(user_id: str, role: str, fallback_workspace_id: str = "mock_user_001") -> dict[str, Any]:
-    rows = visible_workspaces_for_user(user_id, role, fallback_workspace_id)
+def workspace_selector_payload(
+    user_id: str,
+    role: str,
+    fallback_workspace_id: str = "mock_user_001",
+) -> dict[str, Any]:
+    rows = visible_workspaces_for_user(
+        user_id,
+        role,
+        fallback_workspace_id,
+    )
 
-    fallback_allowed = not _firebase_auth_mode()
-    default_workspace_id = _clean(fallback_workspace_id, "mock_user_001") if fallback_allowed else ""
+    fallback_allowed = (
+        not _firebase_auth_mode()
+        and _repository().backend_name == "json"
+    )
 
-    if rows and default_workspace_id not in {row["workspaceId"] for row in rows}:
-        default_workspace_id = rows[0]["workspaceId"]
+    default_workspace_id = (
+        _clean(fallback_workspace_id, "mock_user_001")
+        if fallback_allowed
+        else ""
+    )
+
+    visible_ids = {
+        _clean(row.get("workspaceId"))
+        for row in rows
+    }
+
+    if rows and default_workspace_id not in visible_ids:
+        default_workspace_id = _clean(rows[0].get("workspaceId"))
 
     if not rows and not fallback_allowed:
         default_workspace_id = ""
@@ -271,6 +300,26 @@ def workspace_selector_payload(user_id: str, role: str, fallback_workspace_id: s
     }
 
 
+def _next_identifier(
+    prefix: str,
+    rows: list[dict[str, Any]],
+    key: str,
+) -> str:
+    existing = {
+        _clean(row.get(key))
+        for row in rows
+    }
+
+    number = len(existing) + 1
+
+    while True:
+        candidate = f"{prefix}_{number:04d}"
+
+        if candidate not in existing:
+            return candidate
+
+        number += 1
+
 
 def create_customer(
     *,
@@ -278,29 +327,28 @@ def create_customer(
     billing_email: str = "",
     customer_id: str = "",
 ) -> dict[str, Any]:
-    customers = list_customers()
-
     name = _clean(name)
+
     if not name:
         raise ValueError("Customer name is required")
 
-    customer_id = _clean(customer_id) or f"cust_{len(customers) + 1:04d}"
+    customers = list_customers()
+    customer_id = _clean(customer_id) or _next_identifier(
+        "cust",
+        customers,
+        "customerId",
+    )
 
-    if any(row.get("customerId") == customer_id for row in customers):
+    if get_customer_record(customer_id):
         raise ValueError(f"Customer already exists: {customer_id}")
 
-    customer = {
+    return _repository().upsert_customer({
         "customerId": customer_id,
         "name": name,
         "billingEmail": _clean(billing_email),
         "status": "active",
         "createdAt": _now(),
-    }
-
-    customers.append(customer)
-    _write_list(CUSTOMERS_PATH, customers)
-
-    return customer
+    })
 
 
 def create_workspace(
@@ -310,8 +358,6 @@ def create_workspace(
     workspace_id: str = "",
     subscription_owner_user_id: str = "",
 ) -> dict[str, Any]:
-    workspaces = list_workspaces()
-
     customer_id = _clean(customer_id)
     label = _clean(label)
 
@@ -324,24 +370,26 @@ def create_workspace(
     if not label:
         raise ValueError("Workspace label is required")
 
-    workspace_id = _clean(workspace_id) or f"workspace_{len(workspaces) + 1:04d}"
+    workspaces = list_workspaces()
+    workspace_id = _clean(workspace_id) or _next_identifier(
+        "workspace",
+        workspaces,
+        "workspaceId",
+    )
 
-    if any(row.get("workspaceId") == workspace_id for row in workspaces):
+    if get_workspace_record(workspace_id):
         raise ValueError(f"Workspace already exists: {workspace_id}")
 
-    workspace = {
+    return _repository().upsert_workspace({
         "workspaceId": workspace_id,
         "customerId": customer_id,
         "label": label,
         "status": "active",
-        "subscriptionOwnerUserId": _clean(subscription_owner_user_id),
+        "subscriptionOwnerUserId": _clean(
+            subscription_owner_user_id
+        ),
         "createdAt": _now(),
-    }
-
-    workspaces.append(workspace)
-    _write_list(WORKSPACES_PATH, workspaces)
-
-    return workspace
+    })
 
 
 def add_workspace_membership(
@@ -350,13 +398,16 @@ def add_workspace_membership(
     workspace_id: str,
     role: str = "member",
 ) -> dict[str, Any]:
-    memberships = list_memberships()
-
     user_id = _clean(user_id)
     workspace_id = _clean(workspace_id)
     role = _clean(role, "member").lower()
 
-    if role not in {"owner", "admin", "member", "billing_admin"}:
+    if role not in {
+        "owner",
+        "admin",
+        "member",
+        "billing_admin",
+    }:
         role = "member"
 
     if not user_id:
@@ -365,93 +416,29 @@ def add_workspace_membership(
     if not get_workspace_record(workspace_id):
         raise ValueError(f"Workspace not found: {workspace_id}")
 
-    for membership in memberships:
-        if membership.get("userId") == user_id and membership.get("workspaceId") == workspace_id:
-            membership["role"] = role
-            membership["status"] = "active"
-            _write_list(MEMBERSHIPS_PATH, memberships)
-            return membership
-
-    membership = {
+    return _repository().upsert_membership({
         "userId": user_id,
         "workspaceId": workspace_id,
         "role": role,
         "status": "active",
         "createdAt": _now(),
-    }
-
-    memberships.append(membership)
-    _write_list(MEMBERSHIPS_PATH, memberships)
-
-    return membership
-
-# === STAGE9F3_FIREBASE_ONBOARDING_START ===
-
-def _stage9f3_hash(value: str, length: int = 12) -> str:
-    value = _clean(value)
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
+    })
 
 
-def _stage9f3_slug(value: str, fallback: str = "user") -> str:
-    text = _clean(value, fallback).lower()
-    text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
-    return text[:42] or fallback
+def _stable_hash(value: str, length: int = 12) -> str:
+    return hashlib.sha256(
+        _clean(value).encode("utf-8")
+    ).hexdigest()[:length]
 
 
-def _stage9f3_find_customer(customer_id: str) -> dict[str, Any] | None:
-    customer_id = _clean(customer_id)
-    for customer in list_customers():
-        if customer.get("customerId") == customer_id:
-            return customer
-    return None
+def _display_root(email: str, display_name: str) -> str:
+    if _clean(display_name):
+        return _clean(display_name)
 
+    if _clean(email) and "@" in email:
+        return email.split("@", 1)[0]
 
-def _stage9f3_find_workspace(workspace_id: str) -> dict[str, Any] | None:
-    workspace_id = _clean(workspace_id)
-    for workspace in list_workspaces():
-        if workspace.get("workspaceId") == workspace_id:
-            return workspace
-    return None
-
-
-def _stage9f3_membership_exists(user_id: str, workspace_id: str) -> bool:
-    user_id = _clean(user_id)
-    workspace_id = _clean(workspace_id)
-    return any(
-        row.get("userId") == user_id
-        and row.get("workspaceId") == workspace_id
-        and row.get("status", "active") == "active"
-        for row in list_memberships()
-    )
-
-
-def _stage9f3_add_membership_if_missing(user_id: str, workspace_id: str, role: str = "owner") -> dict[str, Any]:
-    user_id = _clean(user_id)
-    workspace_id = _clean(workspace_id)
-    role = _clean(role, "owner")
-
-    memberships = list_memberships()
-
-    for row in memberships:
-        if row.get("userId") == user_id and row.get("workspaceId") == workspace_id:
-            if row.get("status") != "active":
-                row["status"] = "active"
-                row["role"] = role
-                _write_list(MEMBERSHIPS_PATH, memberships)
-            return row
-
-    membership = {
-        "userId": user_id,
-        "workspaceId": workspace_id,
-        "role": role,
-        "status": "active",
-        "createdAt": _now(),
-        "source": "firebase",
-    }
-
-    memberships.append(membership)
-    _write_list(MEMBERSHIPS_PATH, memberships)
-    return membership
+    return "My"
 
 
 def bootstrap_firebase_user_workspace(
@@ -460,13 +447,7 @@ def bootstrap_firebase_user_workspace(
     email: str = "",
     display_name: str = "",
 ) -> dict[str, Any]:
-    """Create a private customer/workspace/membership for a Firebase user.
-
-    Idempotent:
-      - Same Firebase UID always maps to the same customer/workspace IDs.
-      - Existing active membership is reused.
-      - No mock workspace fallback is used.
-    """
+    """Idempotently create durable Firebase tenant records."""
     user_id = _clean(user_id)
     email = _clean(email).lower()
     display_name = _clean(display_name)
@@ -474,12 +455,26 @@ def bootstrap_firebase_user_workspace(
     if not user_id:
         raise ValueError("user_id is required")
 
-    existing_memberships = user_workspace_memberships(user_id)
-    for membership in existing_memberships:
-        workspace = get_workspace_record(membership.get("workspaceId"))
-        if workspace and workspace.get("status", "active") == "active":
-            customer = get_customer_record(workspace.get("customerId"))
-            _stage9h1_seed_default_subscription_for_workspace(workspace.get("workspaceId"), user_id)
+    for membership in user_workspace_memberships(user_id):
+        workspace = get_workspace_record(
+            membership.get("workspaceId")
+        )
+
+        if (
+            workspace
+            and _clean(
+                workspace.get("status"),
+                "active",
+            ).lower() == "active"
+        ):
+            customer = get_customer_record(
+                workspace.get("customerId")
+            )
+
+            _seed_default_subscription_for_workspace(
+                workspace.get("workspaceId"),
+                user_id,
+            )
 
             return {
                 "created": False,
@@ -490,45 +485,46 @@ def bootstrap_firebase_user_workspace(
                 "membership": membership,
             }
 
-    stable = _stage9f3_hash(user_id)
+    stable = _stable_hash(user_id)
     customer_id = f"cust_fb_{stable}"
     workspace_id = f"ws_fb_{stable}"
+    display_root = _display_root(email, display_name)
 
-    customer = _stage9f3_find_customer(customer_id)
+    customer = get_customer_record(customer_id)
+
     if not customer:
-        customers = list_customers()
-        readable_name = display_name or email.split("@")[0] if email else "New Customer"
-        customer = {
+        customer = _repository().upsert_customer({
             "customerId": customer_id,
-            "name": readable_name,
+            "name": display_root,
             "billingEmail": email,
             "status": "active",
             "createdAt": _now(),
-            "source": "firebase",
-            "ownerUserId": user_id,
-        }
-        customers.append(customer)
-        _write_list(CUSTOMERS_PATH, customers)
+        })
 
-    workspace = _stage9f3_find_workspace(workspace_id)
+    workspace = get_workspace_record(workspace_id)
+
     if not workspace:
-        workspaces = list_workspaces()
-        label_root = display_name or email.split("@")[0] if email else "My"
-        workspace = {
+        workspace = _repository().upsert_workspace({
             "workspaceId": workspace_id,
             "customerId": customer_id,
-            "label": f"{label_root} Workspace",
+            "label": f"{display_root} Workspace",
             "status": "active",
             "subscriptionOwnerUserId": user_id,
             "createdAt": _now(),
-            "source": "firebase",
-        }
-        workspaces.append(workspace)
-        _write_list(WORKSPACES_PATH, workspaces)
+        })
 
-    membership = _stage9f3_add_membership_if_missing(user_id, workspace_id, "owner")
+    membership = _repository().upsert_membership({
+        "userId": user_id,
+        "workspaceId": workspace_id,
+        "role": "owner",
+        "status": "active",
+        "createdAt": _now(),
+    })
 
-    _stage9h1_seed_default_subscription_for_workspace(workspace_id, user_id)
+    _seed_default_subscription_for_workspace(
+        workspace_id,
+        user_id,
+    )
 
     return {
         "created": True,
@@ -539,80 +535,34 @@ def bootstrap_firebase_user_workspace(
         "membership": membership,
     }
 
-# === STAGE9F3_FIREBASE_ONBOARDING_END ===
 
-
-# === STAGE9H1_FIREBASE_DEFAULT_SUBSCRIPTION_START ===
-
-def _stage9h1_seed_default_subscription_for_workspace(workspace_id: str, user_id: str = "") -> None:
-    """Best-effort private-beta starter entitlement for Firebase workspaces.
-
-    Uses services.billing_usage, which is the billing module currently used by
-    billing_provider.py and /api/billing/entitlement.
-    """
+def _seed_default_subscription_for_workspace(
+    workspace_id: str,
+    user_id: str = "",
+) -> None:
     workspace_id = _clean(workspace_id)
-    user_id = _clean(user_id)
 
     if not workspace_id:
-        return
+        raise ValueError("workspaceId is required")
 
-    try:
-        from services.billing_usage import get_workspace_subscription, set_workspace_plan
-    except Exception as exc:
-        print("[stage9h1d] Could not import billing_usage helpers:", repr(exc), flush=True)
-        return
+    from services.billing_usage import set_workspace_plan
 
-    try:
-        existing = get_workspace_subscription(workspace_id)
-        status = _clean(existing.get("status")).lower() if isinstance(existing, dict) else ""
-        plan_key = _clean(
-            existing.get("planKey") if isinstance(existing, dict) else "",
-            _clean(existing.get("plan") if isinstance(existing, dict) else "", "")
-        ).lower()
+    # Check the persistence repository directly. The public billing helper
+    # returns a synthetic starter plan when no stored subscription exists,
+    # which must not be mistaken for a durable database record.
+    existing = _repository().get_workspace_subscription(workspace_id)
+
+    if isinstance(existing, dict):
+        status = _clean(existing.get("status")).lower()
+        plan_key = _clean(existing.get("planKey")).lower()
 
         if status in {"active", "trialing"} and plan_key:
             return
-    except Exception:
-        pass
 
-    attempts = [
-        lambda: set_workspace_plan(
-            workspace_id=workspace_id,
-            plan_key="starter",
-            status="active",
-            provider="private_beta",
-            subscription_id=f"private_beta_{workspace_id}",
-        ),
-        lambda: set_workspace_plan(
-            workspace_id=workspace_id,
-            plan_key="starter",
-            status="active",
-            provider="private_beta",
-        ),
-        lambda: set_workspace_plan(
-            workspace_id=workspace_id,
-            plan_key="starter",
-            status="active",
-        ),
-        lambda: set_workspace_plan(workspace_id, "starter", "active"),
-        lambda: set_workspace_plan(workspace_id, "starter"),
-    ]
-
-    last_error = None
-
-    for attempt in attempts:
-        try:
-            attempt()
-            print("[stage9h1d] Seeded starter entitlement for", workspace_id, flush=True)
-            return
-        except TypeError as exc:
-            last_error = exc
-            continue
-        except Exception as exc:
-            last_error = exc
-            break
-
-    print("[stage9h1d] Could not seed starter entitlement:", repr(last_error), flush=True)
-
-# === STAGE9H1_FIREBASE_DEFAULT_SUBSCRIPTION_END ===
-
+    set_workspace_plan(
+        workspace_id=workspace_id,
+        plan_key="starter",
+        status="active",
+        provider="private_beta",
+        subscription_id=f"private_beta_{workspace_id}",
+    )

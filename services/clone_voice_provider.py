@@ -27,10 +27,17 @@ def create_voice_parameter(source_audio_path: pathlib.Path, audio_mime_type: str
     print("[clone_voice_provider] Creating voice parameter from:", source_audio_path, flush=True)
     print("[clone_voice_provider] audio_mime_type:", mime, flush=True)
 
+    api_key, workspace_id = _credentials()
+
+    # The provider module resolves the Singapore endpoint from the workspace ID.
+    # Passing an explicit, source-derived preferred name keeps identities traceable
+    # without storing the original source file permanently.
     return voice_feature.create_voice(
         str(source_audio_path),
         target_model=DEFAULT_MODEL,
+        preferred_name=source_audio_path.stem,
         audio_mime_type=mime,
+        api_key=api_key,
     )
 
 

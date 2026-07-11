@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from services.persistence_repository import get_persistence_repository
 from services.customer_workspace import workspace_selector_payload
 
 from werkzeug.datastructures import FileStorage
@@ -31,6 +32,19 @@ STANDARD_VOICE_PREVIEW_TEXT = (
     "Hello, this is a preview of this voice. "
     "I can read your narration clearly, naturally, and consistently."
 )
+
+
+def _voice_repository():
+    return get_persistence_repository()
+
+
+def _durable_voice_catalog_enabled() -> bool:
+    return _voice_repository().backend_name == "postgres"
+
+
+def _preview_object_key(paths: "WorkspacePaths", preview_path: pathlib.Path) -> str:
+    from services.object_storage import object_key_for_voice_preview
+    return object_key_for_voice_preview(paths.workspace_id, preview_path.name)
 
 
 @dataclass(frozen=True)
@@ -288,6 +302,9 @@ def delete_if_exists(path: pathlib.Path | None) -> None:
 
 
 def voice_parameter_exists(paths: WorkspacePaths, voice_id: str) -> bool:
+    voice_id = safe_slug(voice_id)
+    if _durable_voice_catalog_enabled():
+        return _voice_repository().get_workspace_voice(paths.workspace_id, voice_id) is not None
     return stable_parameter_path(paths, voice_id).exists() or legacy_parameter_path(paths, voice_id).exists()
 
 
@@ -317,6 +334,14 @@ def save_voice_parameter(paths: WorkspacePaths, voice_parameter: str, voice_id: 
 def load_workspace_voice_parameter(paths: WorkspacePaths, voice_id: str) -> tuple[str, pathlib.Path]:
     voice_id = safe_slug(voice_id)
 
+    if _durable_voice_catalog_enabled():
+        record = _voice_repository().get_workspace_voice(paths.workspace_id, voice_id)
+        if record and record.get("providerVoiceId"):
+            path = stable_parameter_path(paths, voice_id)
+            if not path.exists():
+                path.write_text(str(record["providerVoiceId"]), encoding="utf-8")
+            return str(record["providerVoiceId"]).strip(), path
+
     candidates = [
         stable_parameter_path(paths, voice_id),
         legacy_parameter_path(paths, voice_id),
@@ -330,14 +355,35 @@ def load_workspace_voice_parameter(paths: WorkspacePaths, voice_id: str) -> tupl
 
 
 def load_voice_metadata(paths: WorkspacePaths, voice_id: str) -> dict[str, Any]:
+    voice_id = safe_slug(voice_id)
+
+    if _durable_voice_catalog_enabled():
+        record = _voice_repository().get_workspace_voice(paths.workspace_id, voice_id)
+        if record:
+            stored_metadata = record.get("metadata")
+            data = dict(stored_metadata) if isinstance(stored_metadata, dict) else {}
+            display_name = record.get("displayName") or data.get("displayName") or display_name_from_voice_id(voice_id)
+            gender = normalize_gender(record.get("gender") or data.get("gender") or infer_gender_from_voice_id(voice_id))
+            data.update({
+                "voiceId": voice_id,
+                "displayName": display_name,
+                "gender": gender,
+                "label": voice_label(display_name, gender),
+                "sourceType": record.get("sourceType") or data.get("sourceType") or "upload",
+                "previewText": data.get("previewText") or STANDARD_VOICE_PREVIEW_TEXT,
+                "previewKind": data.get("previewKind") or "standard_synthesized",
+                "previewObjectKey": record.get("previewObjectKey") or data.get("previewObjectKey") or "",
+                "updatedAt": record.get("updatedAt") or data.get("updatedAt") or "",
+            })
+            return data
+
     path = metadata_path(paths, voice_id)
 
     if not path.exists():
         gender = infer_gender_from_voice_id(voice_id)
         display_name = display_name_from_voice_id(voice_id)
-
         return {
-            "voiceId": safe_slug(voice_id),
+            "voiceId": voice_id,
             "displayName": display_name,
             "gender": gender,
             "label": voice_label(display_name, gender),
@@ -362,7 +408,6 @@ def load_voice_metadata(paths: WorkspacePaths, voice_id: str) -> dict[str, Any]:
 
     gender = infer_gender_from_voice_id(voice_id)
     display_name = display_name_from_voice_id(voice_id)
-
     return {
         "voiceId": safe_slug(voice_id),
         "displayName": display_name,
@@ -390,6 +435,7 @@ def save_voice_metadata(
 
     display_name = (display_name or existing.get("displayName") or display_name_from_voice_id(voice_id)).strip()
     gender = require_gender(gender or existing.get("gender"))
+    preview_key = _preview_object_key(paths, preview_path)
 
     metadata = {
         **existing,
@@ -402,13 +448,39 @@ def save_voice_metadata(
         "previewKind": "standard_synthesized",
         "parameterPath": relative_to_root(parameter_path),
         "previewPath": relative_to_root(preview_path),
+        "previewObjectKey": preview_key,
         "parameterCreated": bool(parameter_created),
         "previewCreated": bool(preview_created),
-        "updatedAt": _dt.datetime.now().isoformat(timespec="seconds"),
+        "updatedAt": _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
     }
 
     path = metadata_path(paths, voice_id)
     path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+    if _durable_voice_catalog_enabled():
+        mirror = _mirror_workspace_media_to_object_storage(paths, "voice_previews", preview_path)
+        if not mirror.get("ok"):
+            raise RuntimeError(
+                "Voice preview could not be saved to production object storage: "
+                + str(mirror.get("error") or mirror.get("reason") or "unknown error")
+            )
+
+        provider_voice_id = parameter_path.read_text(encoding="utf-8").strip()
+        _voice_repository().upsert_workspace_voice(
+            paths.workspace_id,
+            voice_id,
+            {
+                "providerVoiceId": provider_voice_id,
+                "displayName": display_name,
+                "gender": gender,
+                "sourceType": source_type,
+                "previewObjectKey": preview_key,
+                "previewContentType": "audio/wav",
+                "status": "active",
+                "metadata": metadata,
+            },
+        )
+
     return metadata, path
 
 
@@ -420,30 +492,42 @@ def _voice_id_from_param_path(path: pathlib.Path) -> str:
 
 
 def list_workspace_voice_parameters(paths: WorkspacePaths) -> list[dict[str, Any]]:
-    files = []
+    if _durable_voice_catalog_enabled():
+        rows = []
+        for record in _voice_repository().list_workspace_voices(paths.workspace_id):
+            voice_id = safe_slug(record.get("voiceId"))
+            metadata = dict(record.get("metadata")) if isinstance(record.get("metadata"), dict) else {}
+            display_name = record.get("displayName") or metadata.get("displayName") or display_name_from_voice_id(voice_id)
+            gender = normalize_gender(record.get("gender") or metadata.get("gender"))
+            preview_key = record.get("previewObjectKey") or metadata.get("previewObjectKey") or ""
+            rows.append({
+                "voiceId": voice_id,
+                "displayName": display_name,
+                "gender": gender,
+                "label": voice_label(display_name, gender),
+                "previewUrl": f"/media/workspaces/{paths.workspace_id}/voice_previews/{pathlib.Path(preview_key).name}" if preview_key else "",
+                "previewText": metadata.get("previewText") or STANDARD_VOICE_PREVIEW_TEXT,
+                "previewKind": metadata.get("previewKind") or "standard_synthesized",
+                "parameterPath": metadata.get("parameterPath") or "database:workspace_voices",
+                "previewPath": metadata.get("previewPath") or preview_key,
+                "updatedAt": record.get("updatedAt") or metadata.get("updatedAt") or "",
+            })
+        return rows
 
-    for path in paths.voice_params_dir.glob("*.txt"):
-        files.append(path)
-
+    files = list(paths.voice_params_dir.glob("*.txt"))
     unique: dict[str, pathlib.Path] = {}
 
     for path in files:
         voice_id = _voice_id_from_param_path(path)
         preferred = stable_parameter_path(paths, voice_id)
-
-        if voice_id not in unique:
-            unique[voice_id] = path
-
-        if path == preferred:
+        if voice_id not in unique or path == preferred:
             unique[voice_id] = path
 
     rows = []
-
     for voice_id, param_path in unique.items():
         metadata = load_voice_metadata(paths, voice_id)
         preview_path = stable_preview_path(paths, voice_id)
         preview_url = workspace_voice_preview_url(paths, preview_path) if preview_path.exists() else ""
-
         rows.append({
             "voiceId": voice_id,
             "displayName": metadata.get("displayName") or display_name_from_voice_id(voice_id),
@@ -459,10 +543,8 @@ def list_workspace_voice_parameters(paths: WorkspacePaths) -> list[dict[str, Any
         })
 
     rows.sort(key=lambda row: row.get("mtime", 0), reverse=True)
-
     for row in rows:
         row.pop("mtime", None)
-
     return rows
 
 
@@ -471,6 +553,20 @@ def delete_workspace_voice(paths: WorkspacePaths, voice_id: str) -> dict[str, An
     voice_id = safe_slug(voice_id)
     deleted: list[str] = []
 
+    if _durable_voice_catalog_enabled():
+        record = _voice_repository().get_workspace_voice(paths.workspace_id, voice_id)
+        if record:
+            preview_key = record.get("previewObjectKey") or ""
+            if preview_key:
+                try:
+                    from services.object_storage import get_object_storage
+                    if get_object_storage().delete(preview_key):
+                        deleted.append(str(preview_key))
+                except Exception as exc:
+                    print("[clone_voice_workspace] Could not delete preview object:", repr(exc), flush=True)
+            if _voice_repository().delete_workspace_voice(paths.workspace_id, voice_id):
+                deleted.append(f"database:workspace_voices/{paths.workspace_id}/{voice_id}")
+
     candidates: list[pathlib.Path] = [
         stable_parameter_path(paths, voice_id),
         legacy_parameter_path(paths, voice_id),
@@ -478,18 +574,10 @@ def delete_workspace_voice(paths: WorkspacePaths, voice_id: str) -> dict[str, An
         metadata_path(paths, voice_id),
     ]
 
-    for pattern in [
-        f"{voice_id}_preview.*",
-        f"{voice_id}.*",
-    ]:
-        for path in paths.voice_previews_dir.glob(pattern):
-            candidates.append(path)
+    for pattern in [f"{voice_id}_preview.*", f"{voice_id}.*"]:
+        candidates.extend(paths.voice_previews_dir.glob(pattern))
 
-    unique: dict[str, pathlib.Path] = {}
-
-    for path in candidates:
-        unique[str(path.resolve())] = path
-
+    unique = {str(path.resolve()): path for path in candidates}
     for path in unique.values():
         if path.exists():
             deleted.append(relative_to_root(path))
@@ -501,3 +589,4 @@ def delete_workspace_voice(paths: WorkspacePaths, voice_id: str) -> dict[str, An
         "deleted": deleted,
         "deletedCount": len(deleted),
     }
+

@@ -6,3 +6,4 @@ gunicorn
 stripe
 google-cloud-storage
 firebase-admin
+psycopg[binary]
