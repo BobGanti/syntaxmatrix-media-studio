@@ -540,29 +540,27 @@ def _seed_default_subscription_for_workspace(
     workspace_id: str,
     user_id: str = "",
 ) -> None:
+    """Create one pending paid subscription record for a new workspace.
+
+    Existing records are never overwritten here. Stripe webhooks remain the
+    authority that changes the status to active/trialing after payment.
+    """
     workspace_id = _clean(workspace_id)
 
     if not workspace_id:
         raise ValueError("workspaceId is required")
 
-    from services.billing_usage import set_workspace_plan
-
-    # Check the persistence repository directly. The public billing helper
-    # returns a synthetic starter plan when no stored subscription exists,
-    # which must not be mistaken for a durable database record.
     existing = _repository().get_workspace_subscription(workspace_id)
+    if isinstance(existing, dict) and existing:
+        return
 
-    if isinstance(existing, dict):
-        status = _clean(existing.get("status")).lower()
-        plan_key = _clean(existing.get("planKey")).lower()
-
-        if status in {"active", "trialing"} and plan_key:
-            return
+    from services.billing_usage import set_workspace_plan
 
     set_workspace_plan(
         workspace_id=workspace_id,
         plan_key="starter",
-        status="active",
-        provider="private_beta",
-        subscription_id=f"private_beta_{workspace_id}",
+        status="incomplete",
+        provider="stripe",
+        subscription_id="",
     )
+

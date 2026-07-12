@@ -220,6 +220,12 @@ def clone_voice_finance_console_before_request_guard():
     from flask import request, send_from_directory
 
     if request.path.rstrip("/") == "/admin/clone-voice/billing":
+        from services.firebase_page_session import require_admin_page_session
+
+        denied = require_admin_page_session(request)
+        if denied is not None:
+            return denied
+
         frontend_dir = Path(__file__).resolve().parent / "frontend" / "clone_voice"
         return send_from_directory(frontend_dir, "billing.html")
 
@@ -763,7 +769,12 @@ if "clone_voice_finance_console_page" not in app.view_functions:
     @app.get("/admin/clone-voice/billing", endpoint="clone_voice_finance_console_page")
     def clone_voice_finance_console_page():
         from pathlib import Path
-        from flask import send_from_directory
+        from flask import request, send_from_directory
+        from services.firebase_page_session import require_admin_page_session
+
+        denied = require_admin_page_session(request)
+        if denied is not None:
+            return denied
 
         frontend_dir = Path(__file__).resolve().parent / "frontend" / "clone_voice"
         return send_from_directory(frontend_dir, "billing.html")
@@ -1824,6 +1835,111 @@ if "stage9f2_firebase_config" not in app.view_functions:
 
 
 
+# === PAID_LAUNCH_SESSION_AND_PLANS_START ===
+if "paid_launch_auth_session_create" not in app.view_functions:
+    @app.post("/api/auth/session", endpoint="paid_launch_auth_session_create")
+    def paid_launch_auth_session_create():
+        from flask import jsonify, make_response, request
+        from services.firebase_auth import (
+            FirebaseAuthError,
+            create_firebase_session_cookie,
+            verify_firebase_id_token,
+        )
+        from services.firebase_page_session import session_cookie_name
+
+        data = request.get_json(silent=True) or {}
+        id_token = str(data.get("idToken") or "").strip()
+        remember = bool(data.get("remember"))
+
+        if not id_token:
+            return jsonify({"ok": False, "error": "idToken is required.", "message": "idToken is required."}), 400
+
+        expires_in = 14 * 24 * 60 * 60 if remember else 12 * 60 * 60
+
+        try:
+            decoded = verify_firebase_id_token(id_token)
+            cookie = create_firebase_session_cookie(id_token, expires_in_seconds=expires_in)
+        except FirebaseAuthError as exc:
+            return jsonify({"ok": False, "error": str(exc), "message": str(exc)}), 401
+
+        response = make_response(jsonify({
+            "ok": True,
+            "email": str(decoded.get("email") or ""),
+            "remember": remember,
+            "expiresIn": expires_in,
+        }))
+
+        forwarded_proto = str(request.headers.get("X-Forwarded-Proto") or "").lower()
+        secure_cookie = bool(request.is_secure or forwarded_proto == "https")
+        response.set_cookie(
+            session_cookie_name(),
+            cookie,
+            max_age=expires_in,
+            httponly=True,
+            secure=secure_cookie,
+            samesite="Lax",
+            path="/",
+        )
+        return response
+
+
+if "paid_launch_auth_session_delete" not in app.view_functions:
+    @app.delete("/api/auth/session", endpoint="paid_launch_auth_session_delete")
+    def paid_launch_auth_session_delete():
+        from flask import jsonify, make_response
+        from services.firebase_page_session import session_cookie_name
+
+        response = make_response(jsonify({"ok": True}))
+        response.delete_cookie(session_cookie_name(), path="/")
+        return response
+
+
+if "paid_launch_plans_page" not in app.view_functions:
+    @app.get("/plans", endpoint="paid_launch_plans_page")
+    def paid_launch_plans_page():
+        from flask import send_from_directory
+        frontend_dir = Path(__file__).resolve().parent / "frontend" / "clone_voice"
+        return send_from_directory(frontend_dir, "plans.html")
+
+
+if "paid_launch_billing_plans" not in app.view_functions:
+    @app.get("/api/billing/plans", endpoint="paid_launch_billing_plans")
+    def paid_launch_billing_plans():
+        from flask import jsonify, request
+        from services.auth_context import AuthError, auth_context_from_request, auth_error_payload
+        from services.billing_pricing import get_pricing_config
+        from services.stripe_price_catalog import get_stripe_price_for_plan
+
+        try:
+            auth_context_from_request(request)
+        except AuthError as exc:
+            return jsonify(auth_error_payload(exc)), exc.status_code
+
+        config = get_pricing_config()
+        rows = []
+        for plan in config.get("plans", []):
+            if not isinstance(plan, dict):
+                continue
+            key = str(plan.get("key") or "").strip().lower()
+            if key not in {"starter", "pro", "business"}:
+                continue
+            rows.append({
+                "key": key,
+                "label": plan.get("label") or key.title(),
+                "monthlyPrice": plan.get("monthlyPrice"),
+                "monthlyCredits": plan.get("monthlyCredits"),
+                "description": plan.get("description") or "",
+                "available": bool(get_stripe_price_for_plan(key)),
+            })
+
+        return jsonify({
+            "ok": True,
+            "currency": str(config.get("currency") or "EUR").upper(),
+            "plans": rows,
+        })
+# === PAID_LAUNCH_SESSION_AND_PLANS_END ===
+
+
 # === STAGE9F3_ACCOUNT_ONBOARDING_TENANT_GATE_START ===
 
 def _stage9f3_auth_provider() -> str:
@@ -1897,6 +2013,7 @@ def _stage9f3_public_path(path: str) -> bool:
         "/auth.js",
         "/auth_bootstrap.js",
         "/api/auth/firebase-config",
+        "/api/auth/session",
     }:
         return True
 

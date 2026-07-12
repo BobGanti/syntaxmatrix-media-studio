@@ -211,8 +211,8 @@ def create_stripe_checkout_session(
 
     session_args: dict[str, Any] = {
         "mode": "subscription",
-        "success_url": f"{app_url}/admin/clone-voice/billing?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
-        "cancel_url": f"{app_url}/admin/clone-voice/billing?checkout=cancelled",
+        "success_url": f"{app_url}/plans?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
+        "cancel_url": f"{app_url}/plans?checkout=cancelled",
         "client_reference_id": workspace_id,
         "line_items": line_items,
         "metadata": {

@@ -14,6 +14,15 @@
     return window.location.pathname === "/auth" || window.location.pathname === "/auth/";
   }
 
+
+  async function clearServerSession() {
+    try {
+      await originalFetch("/api/auth/session", { method: "DELETE", cache: "no-store" });
+    } catch (error) {
+      console.warn("[SyntaxMatrix auth] Could not clear server session:", error);
+    }
+  }
+
   function authRedirect() {
     const next = encodeURIComponent(window.location.pathname + window.location.search + window.location.hash);
     window.location.assign(`/auth?next=${next}`);
@@ -205,6 +214,7 @@
         return current.getIdToken(forceRefresh);
       },
       signOut: async () => {
+        await clearServerSession();
         await auth.signOut();
         authRedirect();
       }
@@ -400,6 +410,7 @@
     button.style.color = "#07111f";
 
     button.addEventListener("click", async () => {
+      await clearServerSession();
       await auth.signOut();
       authRedirect();
     });
@@ -415,6 +426,7 @@
   }
 
   authReadyPromise = initialiseAuth();
+  window.SyntaxMatrixAuthReady = authReadyPromise;
 
   window.fetch = async function syntaxMatrixAuthenticatedFetch(input, init = {}) {
     if (!shouldAttachAuth(input)) {

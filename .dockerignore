@@ -28,3 +28,5 @@ billing/system_voices.json
 billing/stripe_processed_events.json
 billing/stripe_webhook_events.jsonl
 frontend/**/*.bak.*
+*.zip
+

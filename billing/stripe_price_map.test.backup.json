@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "stripeMode": "test",
+  "product": {
+    "id": "prod_UqXLRgj0N6o1Xk",
+    "name": "SyntaxMatrix Media Studio Subscription",
+    "description": "Workspace-based AI voice and narration generation subscription."
+  },
+  "plans": {
+    "starter": {
+      "planKey": "starter",
+      "planLabel": "Starter",
+      "productId": "prod_UqXLRgj0N6o1Xk",
+      "priceId": "price_1TqqGuFvFJxP4ubpBV4wAHpZ",
+      "currency": "eur",
+      "unitAmount": 900,
+      "monthlyPrice": 9.0,
+      "monthlyCredits": 1000,
+      "active": true,
+      "createdAt": "2026-07-08T07:51:57+00:00",
+      "metadata": {
+        "source": "syntaxmatrix_media_studio",
+        "planKey": "starter",
+        "planLabel": "Starter",
+        "monthlyCredits": "1000",
+        "pricingSource": "billing/pricing_config.json"
+      }
+    },
+    "pro": {
+      "planKey": "pro",
+      "planLabel": "Pro",
+      "productId": "prod_UqXLRgj0N6o1Xk",
+      "priceId": "price_1TqqGvFvFJxP4ubpSoQ3r8Na",
+      "currency": "eur",
+      "unitAmount": 2900,
+      "monthlyPrice": 29.0,
+      "monthlyCredits": 5000,
+      "active": true,
+      "createdAt": "2026-07-08T07:51:57+00:00",
+      "metadata": {
+        "source": "syntaxmatrix_media_studio",
+        "planKey": "pro",
+        "planLabel": "Pro",
+        "monthlyCredits": "5000",
+        "pricingSource": "billing/pricing_config.json"
+      }
+    },
+    "business": {
+      "planKey": "business",
+      "planLabel": "Business",
+      "productId": "prod_UqXLRgj0N6o1Xk",
+      "priceId": "price_1TqqGvFvFJxP4ubp7f1SjzV7",
+      "currency": "eur",
+      "unitAmount": 9900,
+      "monthlyPrice": 99.0,
+      "monthlyCredits": 20000,
+      "active": true,
+      "createdAt": "2026-07-08T07:51:57+00:00",
+      "metadata": {
+        "source": "syntaxmatrix_media_studio",
+        "planKey": "business",
+        "planLabel": "Business",
+        "monthlyCredits": "20000",
+        "pricingSource": "billing/pricing_config.json"
+      }
+    }
+  },
+  "updatedAt": "2026-07-08T07:51:57+00:00"
+}

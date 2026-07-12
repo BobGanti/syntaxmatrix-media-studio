@@ -17,6 +17,13 @@ PRICE_MAP_PATH = BILLING_DIR / "stripe_price_map.json"
 PRODUCT_NAME = "SyntaxMatrix Media Studio Subscription"
 PRODUCT_DESCRIPTION = "Workspace-based AI voice and narration generation subscription."
 
+# PAID_PLAN_RUNTIME_PRICE_IDS
+RUNTIME_PRICE_ENV = {
+    "starter": "STRIPE_PRICE_STARTER",
+    "pro": "STRIPE_PRICE_PRO",
+    "business": "STRIPE_PRICE_BUSINESS",
+}
+
 
 class StripePriceCatalogError(RuntimeError):
     pass
@@ -311,8 +318,63 @@ def sync_stripe_price_catalog() -> dict[str, Any]:
     }
 
 
+def _runtime_price_record(
+    plan_key: str,
+) -> dict[str, Any] | None:
+    """Resolve a recurring Stripe Price from Cloud Run configuration."""
+    plan_key = _clean(plan_key).lower()
+    environment_name = RUNTIME_PRICE_ENV.get(plan_key)
+
+    if not environment_name:
+        return None
+
+    price_id = _clean(os.getenv(environment_name))
+
+    if not price_id.startswith("price_"):
+        return None
+
+    plan = get_billing_plan_map().get(plan_key)
+
+    if not isinstance(plan, dict):
+        return None
+
+    monthly_price = plan.get("monthlyPrice")
+
+    try:
+        unit_amount = _minor_unit_amount(monthly_price)
+    except StripePriceCatalogError:
+        return None
+
+    pricing = get_pricing_config()
+
+    return {
+        "planKey": plan_key,
+        "planLabel": (
+            plan.get("label")
+            or plan_key.title()
+        ),
+        "priceId": price_id,
+        "currency": _normalise_currency(
+            pricing.get("currency")
+        ),
+        "unitAmount": unit_amount,
+        "monthlyPrice": monthly_price,
+        "monthlyCredits": plan.get("monthlyCredits"),
+        "active": True,
+        "stripeMode": stripe_mode(),
+        "source": "cloud_run_environment",
+    }
+
+
 def get_stripe_price_for_plan(plan_key: str) -> dict[str, Any] | None:
     plan_key = _clean(plan_key).lower()
+
+    runtime_record = _runtime_price_record(plan_key)
+
+    if runtime_record:
+        return runtime_record
+
+    # Local JSON remains a development and migration fallback.
     price_map = _read_price_map()
     plans = price_map.get("plans")
 

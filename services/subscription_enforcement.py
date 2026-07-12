@@ -150,8 +150,8 @@ def _default_subscription(workspace_id: str) -> dict[str, Any]:
         "planLabel": plan.get("label", "Starter"),
         "monthlyCreditLimit": plan.get("monthlyCredits", 1000),
         "monthlyCredits": plan.get("monthlyCredits", 1000),
-        "status": "active",
-        "provider": "local",
+        "status": "incomplete",
+        "provider": "stripe",
     }
 
 

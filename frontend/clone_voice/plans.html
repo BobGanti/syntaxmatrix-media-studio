@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Choose a plan | SyntaxMatrix Media Studio</title>
+  <link rel="stylesheet" href="/clone_voice/plans.css?v=paid-launch-1">
+</head>
+<body>
+  <main class="plans-shell">
+    <header class="plans-hero">
+      <p class="eyebrow">SyntaxMatrix Media Studio</p>
+      <h1>Choose your plan</h1>
+      <p>Activate your workspace with a monthly plan. Payments and invoices are handled securely by Stripe.</p>
+    </header>
+    <div id="plansStatus" class="status">Loading available plans...</div>
+    <section id="plansGrid" class="plans-grid" aria-live="polite"></section>
+    <p class="footer-link"><a href="/tasks/clone-voice">Return to workspace</a></p>
+  </main>
+  <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-auth-compat.js"></script>
+  <script src="/auth_bootstrap.js"></script>
+  <script src="/clone_voice/plans.js?v=paid-launch-1" defer></script>
+</body>
+</html>

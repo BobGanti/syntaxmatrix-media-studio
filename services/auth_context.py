@@ -97,8 +97,17 @@ def _env_email_set(name: str) -> set[str]:
     }
 
 
-def _firebase_admin_emails() -> set[str]:
+def firebase_admin_emails() -> set[str]:
     return _env_email_set("FIREBASE_ADMIN_EMAILS")
+
+
+def is_firebase_admin_email(email: str) -> bool:
+    return _clean(email).lower() in firebase_admin_emails()
+
+
+def _firebase_admin_emails() -> set[str]:
+    # Backward-compatible private alias.
+    return firebase_admin_emails()
 
 
 def _extract_bearer_token(request) -> str:

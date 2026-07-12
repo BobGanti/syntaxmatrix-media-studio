@@ -208,7 +208,7 @@
           <div class="smx-usage-actions">
             <button type="button" class="smx-usage-refresh">Refresh usage</button>
             <button type="button" class="smx-billing-manage">Manage billing</button>
-            <button type="button" class="smx-billing-upgrade">Upgrade plan</button>
+            <button type="button" class="smx-billing-upgrade">Choose a plan</button>
           </div>
         </div>
       `;
@@ -285,8 +285,14 @@
     const remainingNode = card.querySelector("[data-usage-remaining]");
     const meterFill = card.querySelector(".smx-usage-meter-fill");
     const message = card.querySelector(".smx-usage-message");
+    const manageButton = card.querySelector(".smx-billing-manage");
+    const upgradeButton = card.querySelector(".smx-billing-upgrade");
+    const hasStripeCustomer = Boolean(subscription.stripeCustomerId || subscription.stripeSubscriptionId);
 
-    if (title) title.textContent = `${planLabel} plan`;
+    if (manageButton) manageButton.hidden = !hasStripeCustomer;
+    if (upgradeButton) upgradeButton.textContent = hasStripeCustomer ? "Change plan" : "Choose a plan";
+
+    if (title) title.textContent = allowed ? `${planLabel} plan` : "Payment required";
     if (subtitle) subtitle.textContent = "Monthly generation credits for this workspace.";
 
     if (pill) {
@@ -410,78 +416,9 @@
   }
 
   async function openUpgradeCheckout() {
-    const card = createCard();
     const workspaceId = currentWorkspaceId();
-    const message = card.querySelector(".smx-usage-message");
-    const upgradeButton = card.querySelector(".smx-billing-upgrade");
-    const planNode = card.querySelector("[data-usage-plan]");
-    const currentPlan = planNode?.dataset?.planKey || planNode?.textContent || "starter";
-    const planKey = nextUpgradePlan(currentPlan);
-
-    if (upgradeButton) {
-      upgradeButton.disabled = true;
-      upgradeButton.textContent = "Opening...";
-    }
-
-    try {
-      const portalStatusResponse = await fetch(`/api/billing/portal/stripe/status?workspaceId=${encodeURIComponent(workspaceId)}&t=${Date.now()}`, {
-        cache: "no-store"
-      });
-
-      const portalStatus = await portalStatusResponse.json().catch(() => ({}));
-
-      if (portalStatus.ok && portalStatus.hasStripeCustomer) {
-        if (message) {
-          message.innerHTML = "<strong>Opening billing portal.</strong> Existing subscriptions are managed there to avoid duplicate subscriptions.";
-        }
-
-        await openBillingPortal();
-        return;
-      }
-
-      if (planKey === "enterprise") {
-        if (message) {
-          message.innerHTML = "<strong>Enterprise plan.</strong> Please contact the account team for enterprise billing.";
-        }
-        return;
-      }
-
-      const response = await fetch("/api/billing/checkout/stripe", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          workspaceId,
-          planKey
-        })
-      });
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok || data.ok === false) {
-        throw new Error(data.message || data.error || "Could not open Stripe Checkout");
-      }
-
-      if (data.checkoutUrl) {
-        window.open(data.checkoutUrl, "_blank", "noopener,noreferrer");
-      }
-
-      if (message) {
-        message.innerHTML = `<strong>Checkout opened.</strong> Complete checkout to move this workspace to ${escapeHtml(data.planLabel || planKey)}.`;
-      }
-    } catch (error) {
-      if (message) {
-        message.innerHTML = `<strong>Billing action unavailable.</strong> ${escapeHtml(error.message || String(error))}`;
-      }
-    } finally {
-      if (upgradeButton) {
-        upgradeButton.disabled = false;
-        upgradeButton.textContent = "Upgrade plan";
-      }
-
-      scheduleRefresh();
-    }
+    const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
+    window.location.assign(`/plans${query}`);
   }
 
 

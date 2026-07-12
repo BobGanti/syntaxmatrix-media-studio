@@ -3,51 +3,49 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Sign in | SyntaxMatrix Media Studio</title>
-  <link rel="stylesheet" href="/auth.css" />
+  <title>Account | SyntaxMatrix Media Studio</title>
+  <link rel="stylesheet" href="/auth.css?v=paid-launch-1" />
 </head>
 <body>
   <main class="auth-shell">
     <section class="auth-card">
       <div class="brand-block">
         <div class="brand-mark">SMX</div>
-        <div>
-          <p class="eyebrow">SyntaxMatrix</p>
-          <h1>Media Studio</h1>
-        </div>
+        <div><p class="eyebrow">SyntaxMatrix</p><h1>Media Studio</h1></div>
       </div>
 
-      <p class="lead">
-        Sign in or create your account to access your private workspace.
-      </p>
+      <div class="auth-tabs" role="tablist" aria-label="Account action">
+        <button id="showSignIn" class="auth-tab active" type="button" role="tab" aria-selected="true">Sign in</button>
+        <button id="showRegister" class="auth-tab" type="button" role="tab" aria-selected="false">Create account</button>
+      </div>
 
+      <p id="authLead" class="lead">Sign in to access your private workspace.</p>
       <div id="authStatus" class="status info">Loading authentication...</div>
 
-      <form id="authForm" class="auth-form" autocomplete="on">
-        <label>
-          Email
-          <input id="email" name="email" type="email" autocomplete="email" required />
-        </label>
-
-        <label>
-          Password
-          <input id="password" name="password" type="password" autocomplete="current-password" minlength="6" required />
-        </label>
-
-        <div class="button-row">
-          <button id="signInButton" type="submit">Sign in</button>
-          <button id="registerButton" type="button" class="secondary">Create account</button>
+      <form id="signInForm" class="auth-form" autocomplete="on">
+        <label>Email<input id="signInEmail" name="email" type="email" autocomplete="email" required /></label>
+        <label>Password<input id="signInPassword" name="password" type="password" autocomplete="current-password" minlength="6" required /></label>
+        <div class="auth-options">
+          <label class="checkbox-row"><input id="rememberMe" type="checkbox" checked /> <span>Remember me</span></label>
+          <button id="resetPasswordButton" class="link-button" type="button">Forgot password?</button>
         </div>
+        <button id="signInButton" class="primary-button" type="submit">Sign in</button>
       </form>
 
-      <p class="fine-print">
-        Registration uses Firebase Authentication. Your app workspace will be created in the next onboarding stage.
-      </p>
+      <form id="registerForm" class="auth-form hidden" autocomplete="on">
+        <label>Email<input id="registerEmail" name="email" type="email" autocomplete="email" required /></label>
+        <label>Password<input id="registerPassword" name="new-password" type="password" autocomplete="new-password" minlength="8" required /></label>
+        <label>Confirm password<input id="confirmPassword" name="confirm-password" type="password" autocomplete="new-password" minlength="8" required /></label>
+        <p class="form-note">After registration, choose a paid plan to activate voice creation and narration.</p>
+        <button id="registerButton" class="primary-button" type="submit">Create account</button>
+      </form>
+
+      <p class="fine-print">Secure authentication is provided by Firebase. Payment details are handled by Stripe.</p>
     </section>
   </main>
 
   <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-auth-compat.js"></script>
-  <script src="/auth.js"></script>
+  <script src="/auth.js?v=paid-launch-1"></script>
 </body>
 </html>
