@@ -126,3 +126,13 @@ billing/stripe_price_map.json
 object_storage/
 *.zip
 # SyntaxMatrix local runtime state - do not ship test/mock runtime data
+# SyntaxMatrix cleanup / local runtime state
+*.pyc
+*.pyo
+*.sha256
+.pricing_installer.b85
+patches/*
+!patches/.gitkeep
+reports/cleanup_archive/
+workspaces/mock_user_001/
+workspaces/mock_user_002/

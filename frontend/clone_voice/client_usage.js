@@ -532,3 +532,87 @@
     init();
   }
 })();
+
+// >>> SMX_CHECKOUT_RETURN_RECONCILE >>>
+(() => {
+  "use strict";
+
+  function workspaceIdFromPage() {
+    const params = new URLSearchParams(window.location.search);
+
+    return (
+      params.get("workspaceId") ||
+      params.get("workspace") ||
+      document.querySelector("#workspaceSelect")?.value ||
+      document.querySelector('select[name="workspaceId"]')?.value ||
+      ""
+    );
+  }
+
+  async function reconcileCheckoutReturn() {
+    const params = new URLSearchParams(window.location.search);
+    const billing = String(params.get("billing") || "").toLowerCase();
+    const sessionId = params.get("session_id") || params.get("sessionId") || "";
+    const workspaceId = workspaceIdFromPage();
+
+    if (billing !== "success" || !sessionId || !workspaceId) {
+      return;
+    }
+
+    const storageKey = `smxCheckoutReconciled:${sessionId}`;
+
+    try {
+      if (window.sessionStorage.getItem(storageKey) === "1") {
+        return;
+      }
+    } catch (_) {
+      // Ignore storage failure.
+    }
+
+    try {
+      const response = await fetch("/api/billing/checkout/reconcile", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({
+          workspaceId,
+          sessionId
+        })
+      });
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok || payload.ok === false) {
+        console.warn("[SyntaxMatrix billing] Checkout reconciliation failed:", payload);
+        return;
+      }
+
+      try {
+        window.sessionStorage.setItem(storageKey, "1");
+      } catch (_) {
+        // Ignore storage failure.
+      }
+
+      const refreshButton = Array.from(document.querySelectorAll("button, a")).find((node) => {
+        return String(node.textContent || "").toLowerCase().includes("refresh usage");
+      });
+
+      if (refreshButton) {
+        refreshButton.click();
+      }
+
+      window.dispatchEvent(new CustomEvent("smx:billing-reconciled", { detail: payload }));
+    } catch (error) {
+      console.warn("[SyntaxMatrix billing] Checkout reconciliation error:", error);
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", reconcileCheckoutReturn);
+  setTimeout(reconcileCheckoutReturn, 500);
+})();
+// <<< SMX_CHECKOUT_RETURN_RECONCILE <<<
+

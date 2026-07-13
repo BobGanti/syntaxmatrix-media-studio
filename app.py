@@ -2375,3 +2375,301 @@ if __name__ == "__main__":
     print(f"Open: http://{HOST}:{PORT}")
     print("Edit → Image upload contract: multipart field name 'image' repeated in Image 1 → Image 2 → Image 3 order")
     app.run(host=HOST, port=PORT, debug=os.getenv("FLASK_DEBUG", "0") == "1")
+# >>> SMX_ADMIN_CLIENT_LIFECYCLE_ROUTES >>>
+def _smx_ctx_get(ctx, *names, default=""):
+    for name in names:
+        if isinstance(ctx, dict) and name in ctx:
+            value = ctx.get(name)
+        else:
+            value = getattr(ctx, name, None)
+
+        if value is not None and str(value).strip():
+            return value
+
+    return default
+
+
+def _smx_admin_env_set(*names):
+    import os
+
+    values = set()
+
+    for name in names:
+        for item in str(os.environ.get(name, "") or "").split(","):
+            item = item.strip()
+
+            if item:
+                values.add(item)
+
+    return values
+
+
+def _smx_verify_firebase_bearer_context():
+    from flask import request
+
+    header = str(request.headers.get("Authorization") or "").strip()
+    token = ""
+
+    if header.lower().startswith("bearer "):
+        token = header.split(" ", 1)[1].strip()
+
+    if not token:
+        data = request.get_json(silent=True) or {}
+        token = str(data.get("idToken") or data.get("token") or "").strip()
+
+    if not token:
+        return None
+
+    try:
+        import firebase_admin
+        from firebase_admin import auth as firebase_auth
+
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app()
+
+        decoded = firebase_auth.verify_id_token(token, check_revoked=False)
+
+        email = str(decoded.get("email") or "").strip().lower()
+        uid = str(decoded.get("uid") or decoded.get("user_id") or decoded.get("sub") or "").strip()
+        role = str(decoded.get("role") or decoded.get("userRole") or "").strip().lower()
+
+        is_admin_claim = bool(
+            decoded.get("admin")
+            or decoded.get("isAdmin")
+            or role in {"admin", "owner", "super_admin"}
+        )
+
+        return {
+            "uid": uid,
+            "userId": uid,
+            "user_id": uid,
+            "email": email,
+            "userEmail": email,
+            "role": role,
+            "isAdmin": is_admin_claim,
+            "firebaseClaims": decoded,
+            "authSource": "firebase_bearer",
+        }
+    except Exception as exc:
+        return {
+            "authSource": "firebase_bearer",
+            "authError": repr(exc),
+            "firebaseBearerInvalid": True,
+        }
+
+
+def _smx_current_auth_context_or_abort():
+    from flask import abort
+
+    # First try the app's existing server/session auth helpers.
+    for name in [
+        "_require_auth_context",
+        "require_auth_context",
+        "_current_auth_context",
+        "current_auth_context",
+        "_get_auth_context",
+        "get_auth_context",
+    ]:
+        fn = globals().get(name)
+
+        if callable(fn):
+            try:
+                ctx = fn()
+
+                if ctx:
+                    return ctx
+            except Exception:
+                # Fall through to Firebase bearer verification.
+                pass
+
+    # Then try Authorization: Bearer <Firebase ID token>.
+    bearer_ctx = _smx_verify_firebase_bearer_context()
+
+    if bearer_ctx and not bearer_ctx.get("firebaseBearerInvalid"):
+        return bearer_ctx
+
+    abort(401, description="Authentication required.")
+
+
+def _smx_require_admin_context_or_abort():
+    from flask import abort
+
+    # First try any existing app-level admin helper, but do not stop there
+    # if it rejects a Firebase-only admin session.
+    for name in [
+        "_require_admin_context",
+        "require_admin_context",
+        "_require_admin",
+        "require_admin",
+        "_admin_auth_context",
+    ]:
+        fn = globals().get(name)
+
+        if callable(fn):
+            try:
+                ctx = fn()
+
+                if ctx:
+                    return ctx
+            except Exception:
+                pass
+
+    ctx = _smx_current_auth_context_or_abort()
+
+    role = str(_smx_ctx_get(ctx, "role", "userRole", "user_role")).lower()
+    is_admin = bool(_smx_ctx_get(ctx, "is_admin", "isAdmin", default=False))
+    user_id = str(_smx_ctx_get(ctx, "user_id", "userId", "uid")).strip()
+    email = str(_smx_ctx_get(ctx, "email", "user_email", "userEmail")).lower().strip()
+
+    admin_user_ids = _smx_admin_env_set(
+        "ADMIN_USER_IDS",
+        "SMX_ADMIN_USER_IDS",
+        "SYNTAXMATRIX_ADMIN_USER_IDS",
+    )
+
+    admin_emails = {
+        item.lower()
+        for item in _smx_admin_env_set(
+            "ADMIN_EMAILS",
+            "SMX_ADMIN_EMAILS",
+            "SYNTAXMATRIX_ADMIN_EMAILS",
+            "APP_ADMIN_EMAILS",
+            "APP_ADMIN_EMAIL",
+        )
+    }
+
+    if is_admin or role in {"admin", "owner", "super_admin"}:
+        return ctx
+
+    if user_id and user_id in admin_user_ids:
+        return ctx
+
+    if email and email in admin_emails:
+        return ctx
+
+    abort(403, description="Admin access required.")
+
+
+def _smx_actor_user_id(ctx) -> str:
+    return str(_smx_ctx_get(ctx, "user_id", "userId", "uid", "email", default="admin")).strip() or "admin"
+
+
+def _smx_json_error(message: str, status_code: int = 400, **extra):
+    from flask import jsonify
+    payload = {"ok": False, "error": message, **extra}
+    return jsonify(payload), status_code
+
+
+@app.get("/api/admin/client-lifecycle", endpoint="smx_admin_client_lifecycle_index")
+def smx_admin_client_lifecycle_index():
+    from flask import jsonify, request
+    from services.admin_client_lifecycle import list_admin_clients, AdminClientLifecycleError
+
+    _smx_require_admin_context_or_abort()
+
+    include_archived = str(request.args.get("includeArchived") or "").lower() in {"1", "true", "yes"}
+
+    try:
+        return jsonify(list_admin_clients(include_archived=include_archived))
+    except AdminClientLifecycleError as exc:
+        return _smx_json_error(exc.message, exc.status_code, **exc.payload)
+
+
+@app.post("/api/admin/workspaces/<workspace_id>/archive", endpoint="smx_admin_workspace_archive")
+def smx_admin_workspace_archive(workspace_id):
+    from flask import jsonify, request
+    from services.admin_client_lifecycle import archive_client_workspace, AdminClientLifecycleError
+
+    ctx = _smx_require_admin_context_or_abort()
+    data = request.get_json(silent=True) or {}
+    reason = str(data.get("reason") or "admin_archive").strip()
+
+    try:
+        result = archive_client_workspace(
+            workspace_id=workspace_id,
+            actor_user_id=_smx_actor_user_id(ctx),
+            reason=reason,
+        )
+        return jsonify(result)
+    except AdminClientLifecycleError as exc:
+        return _smx_json_error(exc.message, exc.status_code, **exc.payload)
+
+
+@app.post("/api/admin/billing/sync", endpoint="smx_admin_billing_sync")
+def smx_admin_billing_sync():
+    from flask import jsonify, request
+    from services.admin_client_lifecycle import (
+        sync_workspace_billing_from_stripe,
+        reconcile_stripe_identifier,
+        AdminClientLifecycleError,
+    )
+
+    ctx = _smx_require_admin_context_or_abort()
+    data = request.get_json(silent=True) or {}
+
+    workspace_id = str(data.get("workspaceId") or data.get("workspace_id") or "").strip()
+
+    stripe_id = str(
+        data.get("stripeId")
+        or data.get("stripe_id")
+        or data.get("subscriptionId")
+        or data.get("subscription_id")
+        or data.get("paymentIntentId")
+        or data.get("payment_intent_id")
+        or data.get("customerId")
+        or data.get("customer_id")
+        or data.get("sessionId")
+        or data.get("session_id")
+        or ""
+    ).strip()
+
+    try:
+        if stripe_id:
+            result = reconcile_stripe_identifier(
+                stripe_id=stripe_id,
+                workspace_id=workspace_id,
+                actor_user_id=_smx_actor_user_id(ctx),
+            )
+        else:
+            result = sync_workspace_billing_from_stripe(
+                workspace_id=workspace_id,
+                actor_user_id=_smx_actor_user_id(ctx),
+            )
+
+        return jsonify(result)
+    except AdminClientLifecycleError as exc:
+        return _smx_json_error(exc.message, exc.status_code, **exc.payload)
+
+@app.post("/api/billing/checkout/reconcile", endpoint="smx_billing_checkout_reconcile")
+def smx_billing_checkout_reconcile():
+    from flask import jsonify, request, abort
+    from services.customer_workspace import user_has_workspace_access
+    from services.admin_client_lifecycle import reconcile_checkout_session, AdminClientLifecycleError
+
+    ctx = _smx_current_auth_context_or_abort()
+    data = request.get_json(silent=True) or {}
+
+    workspace_id = str(data.get("workspaceId") or data.get("workspace_id") or request.args.get("workspaceId") or "").strip()
+    session_id = str(data.get("sessionId") or data.get("session_id") or request.args.get("session_id") or "").strip()
+
+    user_id = str(_smx_ctx_get(ctx, "user_id", "userId", "uid", default="")).strip()
+    role = str(_smx_ctx_get(ctx, "role", "userRole", default="")).lower()
+    is_admin = bool(_smx_ctx_get(ctx, "is_admin", "isAdmin", default=False))
+
+    if not workspace_id:
+        return _smx_json_error("workspaceId is required", 400)
+
+    if not (is_admin or role in {"admin", "owner", "super_admin"} or user_has_workspace_access(user_id, workspace_id)):
+        abort(403, description="Workspace access required.")
+
+    try:
+        return jsonify(
+            reconcile_checkout_session(
+                session_id=session_id,
+                workspace_id=workspace_id,
+                actor_user_id=user_id or "user",
+            )
+        )
+    except AdminClientLifecycleError as exc:
+        return _smx_json_error(exc.message, exc.status_code, **exc.payload)
+# <<< SMX_ADMIN_CLIENT_LIFECYCLE_ROUTES <<<

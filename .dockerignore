@@ -29,4 +29,14 @@ billing/stripe_processed_events.json
 billing/stripe_webhook_events.jsonl
 frontend/**/*.bak.*
 *.zip
-
+# SyntaxMatrix cleanup / local runtime state
+__pycache__/
+*.pyc
+*.pyo
+*.sha256
+.pricing_installer.b85
+patches/*
+!patches/.gitkeep
+reports/cleanup_archive/
+workspaces/mock_user_001/
+workspaces/mock_user_002/
