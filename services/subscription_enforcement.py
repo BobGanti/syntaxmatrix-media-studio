@@ -141,17 +141,17 @@ def _billing_plan_map() -> dict[str, dict[str, Any]]:
 
 
 def _default_subscription(workspace_id: str) -> dict[str, Any]:
-    plan = _billing_plan_map().get("starter", {})
+    plan = _billing_plan_map().get("free", {})
 
     return {
         "workspaceId": workspace_id,
-        "plan": "starter",
-        "planKey": "starter",
-        "planLabel": plan.get("label", "Starter"),
-        "monthlyCreditLimit": plan.get("monthlyCredits", 1000),
-        "monthlyCredits": plan.get("monthlyCredits", 1000),
-        "status": "incomplete",
-        "provider": "stripe",
+        "plan": "free",
+        "planKey": "free",
+        "planLabel": plan.get("label", "Free"),
+        "monthlyCreditLimit": plan.get("weeklyCredits", 10),
+        "monthlyCredits": plan.get("weeklyCredits", 10),
+        "status": "active",
+        "provider": "internal",
     }
 
 
@@ -237,7 +237,7 @@ def _plan_key(subscription: dict[str, Any]) -> str:
         subscription.get("planKey")
         or subscription.get("plan")
         or subscription.get("plan_id"),
-        "starter",
+        "free",
     ).lower()
 
 
@@ -477,39 +477,30 @@ def entitlement_payload(
     action = _clean(action, "status")
     requested_credits = max(0.0, _number(requested_credits, fallback=0))
 
-    subscription = get_subscription_for_entitlement(workspace_id)
-    status = _subscription_status(subscription)
-    plan_key = _plan_key(subscription)
-    plan = _billing_plan_map().get(plan_key, {})
+    from services.billing_usage import quota_status, custom_voice_entitlement
 
-    monthly_limit = _monthly_limit(subscription)
-    used = used_credits_this_month(workspace_id)
+    status = quota_status(workspace_id)
+    subscription = status["subscription"]
+    plan = status["plan"]
+    limit = status.get("creditLimit")
+    used = status.get("totalCredits") or 0
+    remaining = status.get("remainingCredits")
+    subscription_status = _clean(subscription.get("status"), "active").lower()
 
-    remaining = None
-    quota_state = "unlimited"
+    allowed = subscription_status in ALLOWED_SUBSCRIPTION_STATUSES
+    reason = "allowed" if allowed else f"subscription_{subscription_status or 'unknown'}"
+    message = "Subscription and credits allow this action." if allowed else "Your subscription is not active."
 
-    if monthly_limit is not None:
-        remaining = max(0.0, monthly_limit - used)
-        quota_state = "ok" if used + requested_credits <= monthly_limit else "exceeded"
-
-    allowed = True
-    reason = "allowed"
-    message = "Subscription and credits allow this action."
-
-    if status in BLOCKED_SUBSCRIPTION_STATUSES:
+    if allowed and limit is not None and used + requested_credits > limit:
         allowed = False
-        reason = f"subscription_{status}"
-        message = f"Your subscription is {status}. Please update billing before using this feature."
+        reason = f"{status.get('creditPeriod') or 'credit'}_credit_limit_exceeded"
+        message = f"{str(status.get('creditPeriodLabel') or 'period').title()} usage credits are exhausted. Please upgrade or wait for the next reset."
 
-    elif status not in ALLOWED_SUBSCRIPTION_STATUSES:
+    voices = custom_voice_entitlement(workspace_id)
+    if allowed and action == "voice.parameter.saved" and not voices.get("allowed"):
         allowed = False
-        reason = f"subscription_{status or 'unknown'}"
-        message = "Your subscription is not active. Please activate billing before using this feature."
-
-    elif quota_state == "exceeded":
-        allowed = False
-        reason = "monthly_credit_limit_exceeded"
-        message = "Monthly usage credits are exhausted. Please upgrade or wait for the next billing cycle."
+        reason = "custom_voice_not_in_plan"
+        message = "The Free plan uses system voices only. Upgrade to clone a custom voice."
 
     return {
         "allowed": allowed,
@@ -519,19 +510,31 @@ def entitlement_payload(
         "action": action,
         "requestedCredits": requested_credits,
         "subscription": {
-            "provider": subscription.get("provider", "local"),
-            "status": status,
-            "plan": plan_key,
-            "planKey": plan_key,
-            "planLabel": subscription.get("planLabel") or plan.get("label") or plan_key,
+            "provider": subscription.get("provider", "internal"),
+            "status": subscription_status,
+            "plan": subscription.get("planKey") or "free",
+            "planKey": subscription.get("planKey") or "free",
+            "planLabel": plan.get("label") or "Free",
             "stripeCustomerId": subscription.get("stripeCustomerId") or subscription.get("customerId") or "",
             "stripeSubscriptionId": subscription.get("stripeSubscriptionId") or subscription.get("subscriptionId") or "",
         },
         "usage": {
             "usedCredits": used,
-            "monthlyCreditLimit": monthly_limit,
+            "monthlyCreditLimit": limit,
+            "creditLimit": limit,
             "remainingCredits": remaining,
-            "quotaState": quota_state,
+            "quotaState": status.get("quotaState"),
+            "creditPeriod": status.get("creditPeriod"),
+            "creditPeriodLabel": status.get("creditPeriodLabel"),
+            "periodStart": status.get("periodStart"),
+            "periodEnd": status.get("periodEnd"),
+        },
+        "features": {
+            "systemVoicesOnly": voices.get("systemVoicesOnly"),
+            "customVoiceCloning": voices.get("allowed"),
+            "cloneSlots": voices.get("cloneSlots"),
+            "activeCustomVoices": voices.get("activeCustomVoices"),
+            "remainingCloneSlots": voices.get("remainingCloneSlots"),
         },
     }
 
@@ -568,3 +571,176 @@ def evaluate_flask_request(flask_request, auth_context) -> dict[str, Any]:
     payload["enforced"] = True
 
     return payload
+
+# >>> SMX_SAFE_PRICING_CORE_REPAIR >>>
+# Backend entitlement guard for Free/system-voice-only plans.
+_SMX_ORIGINAL_ENTITLEMENT_PAYLOAD = entitlement_payload
+
+
+def _smx_plan_clone_slots(plan):
+    raw = None
+
+    if isinstance(plan, dict):
+        raw = plan.get("maxCustomVoices", plan.get("cloneSlots"))
+
+    if raw is None:
+        return None
+
+    try:
+        return int(float(raw))
+    except Exception:
+        return 0
+
+
+def entitlement_payload(*, workspace_id: str, action: str = "", requested_credits: float = 0):
+    payload = _SMX_ORIGINAL_ENTITLEMENT_PAYLOAD(
+        workspace_id=workspace_id,
+        action=action,
+        requested_credits=requested_credits,
+    )
+
+    action_key = str(action or "").strip()
+
+    try:
+        subscription = payload.get("subscription") if isinstance(payload, dict) else {}
+        plan_key = str(
+            (subscription or {}).get("planKey")
+            or (subscription or {}).get("plan")
+            or ""
+        ).lower()
+
+        plan = _billing_plan_map().get(plan_key, {})
+        slots = _smx_plan_clone_slots(plan)
+        system_only = bool(plan.get("systemVoicesOnly"))
+
+        clone_action = action_key in {
+            "voice.parameter.saved",
+            "voice.clone.succeeded",
+            "voice.preview.generated",
+        }
+
+        if clone_action and (system_only or slots == 0):
+            payload["allowed"] = False
+            payload["reason"] = "custom_voice_not_allowed"
+            payload["message"] = (
+                "Your current plan allows system voices only. "
+                "Upgrade to clone a custom voice."
+            )
+    except Exception:
+        pass
+
+    return payload
+# <<< SMX_SAFE_PRICING_CORE_REPAIR <<<
+
+# >>> SMX_FREE_PLAN_ENTITLEMENT_OVERRIDE >>>
+# Make the entitlement endpoint agree with the Free-plan launch contract.
+_SMX_ORIGINAL_ENTITLEMENT_PAYLOAD_FREE_PLAN = entitlement_payload
+
+
+def _smx_plan_limit_for_entitlement(plan: dict[str, Any]):
+    period = str(plan.get("creditPeriod") or "").strip().lower()
+
+    if period in {"week", "weekly"}:
+        return plan.get("weeklyCredits"), "week"
+
+    return plan.get("monthlyCredits"), "month"
+
+
+def _smx_entitlement_blocks_custom_voice(plan: dict[str, Any]) -> bool:
+    if bool(plan.get("systemVoicesOnly")):
+        return True
+
+    raw = plan.get("maxCustomVoices", plan.get("cloneSlots"))
+
+    if raw is None:
+        return False
+
+    try:
+        return int(float(raw)) <= 0
+    except Exception:
+        return True
+
+
+def _default_subscription(workspace_id: str) -> dict[str, Any]:
+    plan = _billing_plan_map().get("free", {})
+
+    return {
+        "workspaceId": workspace_id,
+        "plan": "free",
+        "planKey": "free",
+        "planLabel": plan.get("label", "Free"),
+        "monthlyCreditLimit": plan.get("weeklyCredits", 10),
+        "monthlyCredits": plan.get("weeklyCredits", 10),
+        "weeklyCreditLimit": plan.get("weeklyCredits", 10),
+        "weeklyCredits": plan.get("weeklyCredits", 10),
+        "creditPeriod": "week",
+        "status": "active",
+        "provider": "local",
+    }
+
+
+def entitlement_payload(
+    *,
+    workspace_id: str,
+    action: str = "",
+    requested_credits: float = 0,
+) -> dict[str, Any]:
+    payload = _SMX_ORIGINAL_ENTITLEMENT_PAYLOAD_FREE_PLAN(
+        workspace_id=workspace_id,
+        action=action,
+        requested_credits=requested_credits,
+    )
+
+    subscription = payload.get("subscription") if isinstance(payload, dict) else {}
+    plan_key = _clean(
+        (subscription or {}).get("planKey")
+        or (subscription or {}).get("plan")
+        or "free",
+        "free",
+    ).lower()
+
+    plan = _billing_plan_map().get(plan_key, {})
+    limit, period = _smx_plan_limit_for_entitlement(plan)
+
+    if isinstance(subscription, dict):
+        subscription["planKey"] = plan_key
+        subscription["plan"] = plan_key
+        subscription["planLabel"] = subscription.get("planLabel") or plan.get("label") or plan_key
+        subscription["creditPeriod"] = period
+        subscription["maxCustomVoices"] = plan.get("maxCustomVoices", plan.get("cloneSlots"))
+        subscription["cloneSlots"] = plan.get("cloneSlots", plan.get("maxCustomVoices"))
+        subscription["systemVoicesOnly"] = bool(plan.get("systemVoicesOnly"))
+        payload["subscription"] = subscription
+
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    usage["creditPeriod"] = period
+    usage["creditLimit"] = limit
+    usage["monthlyCreditLimit"] = limit
+    usage["weeklyCreditLimit"] = limit if period == "week" else None
+
+    used = _number(usage.get("usedCredits"), fallback=0)
+    if limit is None:
+        usage["remainingCredits"] = None
+        usage["quotaState"] = "unlimited"
+    else:
+        limit_number = _number(limit, fallback=0)
+        usage["remainingCredits"] = max(0.0, limit_number - used)
+        usage["quotaState"] = "ok" if used + _number(requested_credits, fallback=0) <= limit_number else "exceeded"
+
+    payload["usage"] = usage
+    payload["plan"] = plan
+
+    custom_voice_action = str(action or "").strip() in {
+        "voice.parameter.saved",
+        "voice.clone.succeeded",
+        "voice.clone.with_preview",
+        "voice.preview.generated",
+    }
+
+    if custom_voice_action and _smx_entitlement_blocks_custom_voice(plan):
+        payload["allowed"] = False
+        payload["reason"] = "custom_voice_not_allowed"
+        payload["message"] = "Your Free plan uses system voices only. Upgrade to Starter or higher to create saved custom voices."
+
+    return payload
+# <<< SMX_FREE_PLAN_ENTITLEMENT_OVERRIDE <<<

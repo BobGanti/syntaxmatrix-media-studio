@@ -193,8 +193,8 @@ def main() -> None:
     assert "mock_user_001" not in admin_ids
     assert "mock_user_002" not in admin_ids
 
-    assert repository.subscriptions[first_workspace]["planKey"] == "starter"
-    assert repository.subscriptions[second_workspace]["planKey"] == "starter"
+    assert repository.subscriptions[first_workspace]["planKey"] == "free"
+    assert repository.subscriptions[second_workspace]["planKey"] == "free"
 
     billing_usage.record_usage_event(
         first_workspace,

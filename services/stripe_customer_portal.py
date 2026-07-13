@@ -73,7 +73,7 @@ def stripe_customer_portal_status_payload(workspace_id: str) -> dict[str, Any]:
         "workspaceId": workspace_id,
         "subscriptionStatus": subscription.get("status", "active"),
         "planKey": subscription.get("planKey") or subscription.get("plan") or "starter",
-        "returnUrl": f"{_app_public_url()}/tasks/clone-voice?billing=portal-return",
+        "returnUrl": f"{_app_public_url()}/tasks/clone-voice?workspaceId={workspace_id}&billing=portal-return",
     }
 
 
@@ -94,7 +94,7 @@ def create_stripe_customer_portal_session(*, workspace_id: str) -> dict[str, Any
     stripe = _load_stripe_module()
     stripe.api_key = _stripe_secret_key()
 
-    return_url = f"{_app_public_url()}/tasks/clone-voice?billing=portal-return"
+    return_url = f"{_app_public_url()}/tasks/clone-voice?workspaceId={workspace_id}&billing=portal-return"
 
     session = stripe.billing_portal.Session.create(
         customer=stripe_customer_id,

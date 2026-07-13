@@ -21,6 +21,7 @@ from services.auth_context import (
     auth_context_from_request,
     auth_error_payload,
     require_admin,
+    require_workspace_access,
 )
 from services.customer_workspace import workspace_selector_payload
 from services.billing_provider import (
@@ -33,9 +34,14 @@ from services.billing_provider import (
 from services.billing_usage import (
     QuotaExceededError,
     assert_workspace_can_spend,
+    assert_workspace_can_create_custom_voice,
+    assert_workspace_can_use_custom_voice,
+    custom_voice_entitlement,
     audio_duration_seconds,
     billing_plans_payload,
+    estimate_credits,
     estimate_narration_credits_from_text,
+    estimate_voice_creation_credits,
     get_workspace_subscription,
     economics_summary,
     pricing_config_payload,
@@ -89,6 +95,44 @@ from services.clone_voice_workspace import (
 )
 
 
+
+
+
+
+# >>> SMX_CUSTOM_VOICE_PLAN_GUARD >>>
+def _smx_custom_voice_block_response(workspace_id: str):
+    """Return a Flask error response when the active plan cannot create private voices."""
+    try:
+        subscription = get_workspace_subscription(workspace_id)
+        plan_key = str(subscription.get("planKey") or "").strip().lower()
+        plan = subscription.get("plan") or {}
+
+        raw_slots = plan.get("maxCustomVoices", plan.get("cloneSlots"))
+        if raw_slots is None:
+            slots = None
+        else:
+            try:
+                slots = int(float(raw_slots))
+            except Exception:
+                slots = 0
+
+        blocked = (
+            plan_key == "free"
+            or bool(plan.get("systemVoicesOnly"))
+            or slots == 0
+        )
+
+        if blocked:
+            return _error(
+                "Your Free plan uses system voices only. Upgrade to Starter or higher to create saved custom voices.",
+                403,
+            )
+    except Exception as exc:
+        print("[clone_voice_controller] custom voice entitlement check failed:", repr(exc), flush=True)
+        return _error("Could not verify voice-cloning entitlement.", 403)
+
+    return None
+# <<< SMX_CUSTOM_VOICE_PLAN_GUARD <<<
 
 
 def _workspace_media_response_from_object_storage(workspace_id: str, category: str, filename: str):
@@ -166,9 +210,10 @@ def _generate_and_normalize(voice_parameter: str, prompt: str, workspace, title:
     record_usage_event(
         workspace.workspace_id,
         "narration.generated",
-        quantity=duration_seconds or 1,
+        quantity=len(prompt),
         metadata={
             "title": title,
+            "submittedCharacters": len(prompt),
             "outputPath": relative_to_root(output_path),
             "durationSeconds": duration_seconds,
             "speed": speed_info.get("key"),
@@ -186,6 +231,47 @@ def _generate_standard_preview(voice_parameter: str, preview_path):
     print("[clone_voice_controller] Generating standard synthesized voice preview:", preview_path, flush=True)
     generate_narration_to_file(voice_parameter, STANDARD_VOICE_PREVIEW_TEXT, preview_path)
     normalize_generated_audio_file(preview_path)
+
+
+def _preflight_custom_voice(workspace_id: str, *, replacing: bool = False):
+    assert_workspace_can_create_custom_voice(workspace_id, replacing=replacing)
+    return assert_workspace_can_spend(
+        workspace_id,
+        "voice.clone.succeeded",
+        estimated_credits=estimate_voice_creation_credits(STANDARD_VOICE_PREVIEW_TEXT),
+    )
+
+
+def _preflight_preview(workspace_id: str):
+    return assert_workspace_can_spend(
+        workspace_id,
+        "voice.preview.generated",
+        estimated_credits=estimate_credits(
+            "voice.preview.generated",
+            len(STANDARD_VOICE_PREVIEW_TEXT),
+        ),
+    )
+
+
+def _record_custom_voice_usage(workspace_id: str, voice_id: str, *, parameter_created: bool, preview_created: bool):
+    if parameter_created:
+        record_usage_event(
+            workspace_id,
+            "voice.clone.succeeded",
+            quantity=1,
+            metadata={"voiceId": voice_id},
+        )
+    if preview_created:
+        record_usage_event(
+            workspace_id,
+            "voice.preview.generated",
+            quantity=len(STANDARD_VOICE_PREVIEW_TEXT),
+            metadata={
+                "voiceId": voice_id,
+                "previewText": STANDARD_VOICE_PREVIEW_TEXT,
+                "submittedCharacters": len(STANDARD_VOICE_PREVIEW_TEXT),
+            },
+        )
 
 
 
@@ -237,7 +323,9 @@ def _create_workspace_voice_from_path(
         preview_created = False
 
         if is_recording or not existing_parameter:
-            assert_workspace_can_spend(workspace.workspace_id, "voice.parameter.saved", quantity=1)
+            _preflight_custom_voice(workspace.workspace_id, replacing=False)
+        else:
+            assert_workspace_can_use_custom_voice(workspace.workspace_id)
 
         if existing_parameter and not is_recording:
             voice_parameter, param_path = load_workspace_voice_parameter(workspace, voice_id)
@@ -257,6 +345,8 @@ def _create_workspace_voice_from_path(
         )
 
         if is_recording or not preview_is_standard:
+            if not parameter_created:
+                _preflight_preview(workspace.workspace_id)
             _generate_standard_preview(voice_parameter, preview_path)
             preview_created = True
 
@@ -268,6 +358,13 @@ def _create_workspace_voice_from_path(
             source_type="record" if is_recording else "upload",
             parameter_path=param_path,
             preview_path=preview_path,
+            parameter_created=parameter_created,
+            preview_created=preview_created,
+        )
+
+        _record_custom_voice_usage(
+            workspace.workspace_id,
+            voice_id,
             parameter_created=parameter_created,
             preview_created=preview_created,
         )
@@ -321,7 +418,7 @@ def _replace_workspace_voice_from_path(
     if gender not in {"M", "F"}:
         raise ValueError("Voice gender is required. Choose Male (M) or Female (F).")
 
-    assert_workspace_can_spend(workspace.workspace_id, "voice.parameter.saved", quantity=1)
+    _preflight_custom_voice(workspace.workspace_id, replacing=True)
     limited_source_path = source_limited_path(workspace, voice_id)
 
     try:
@@ -342,6 +439,13 @@ def _replace_workspace_voice_from_path(
             source_type=existing.get("sourceType") or "upload",
             parameter_path=param_path,
             preview_path=preview_path,
+            parameter_created=True,
+            preview_created=True,
+        )
+
+        _record_custom_voice_usage(
+            workspace.workspace_id,
+            voice_id,
             parameter_created=True,
             preview_created=True,
         )
@@ -397,6 +501,9 @@ def register_clone_voice_routes(app):
     if "billing_pricing_config" not in app.view_functions:
         @app.get("/api/billing/pricing-config", endpoint="billing_pricing_config")
         def billing_pricing_config():
+            _ctx, auth_response = _admin_context_or_response()
+            if auth_response is not None:
+                return auth_response
             return jsonify({
                 "ok": True,
                 **pricing_config_payload(),
@@ -405,6 +512,9 @@ def register_clone_voice_routes(app):
     if "billing_pricing_config_update" not in app.view_functions:
         @app.post("/api/billing/pricing-config", endpoint="billing_pricing_config_update")
         def billing_pricing_config_update():
+            _ctx, auth_response = _admin_context_or_response()
+            if auth_response is not None:
+                return auth_response
             data = request.get_json(silent=True) or {}
 
             try:
@@ -496,9 +606,41 @@ def register_clone_voice_routes(app):
                 **quota_status(workspace_id),
             })
 
+    if "billing_free_plan_select" not in app.view_functions:
+        @app.post("/api/billing/free-plan", endpoint="billing_free_plan_select")
+        def billing_free_plan_select():
+            data = request.get_json(silent=True) or request.form
+            try:
+                ctx = auth_context_from_request(request)
+                workspace_id = str(data.get("workspaceId") or ctx.workspace_id or "").strip()
+                require_workspace_access(ctx, workspace_id)
+                current = get_workspace_subscription(workspace_id)
+                has_active_paid = (
+                    current.get("planKey") != "free"
+                    and str(current.get("status") or "").lower() in {"active", "trialing"}
+                    and bool(current.get("stripeSubscriptionId") or current.get("subscriptionId"))
+                )
+                if has_active_paid:
+                    return _error("Use the Stripe billing portal to cancel or change an active paid subscription.", 409)
+                subscription = set_workspace_plan(
+                    workspace_id,
+                    "free",
+                    status="active",
+                    provider="internal",
+                    customer_id=current.get("stripeCustomerId") or current.get("customerId") or "",
+                )
+                return jsonify({"ok": True, "subscription": subscription, **quota_status(workspace_id)})
+            except AuthError as exc:
+                return jsonify(auth_error_payload(exc)), exc.status_code
+            except Exception as exc:
+                return _error(str(exc), 400)
+
     if "billing_subscription_update" not in app.view_functions:
         @app.post("/api/billing/subscription", endpoint="billing_subscription_update")
         def billing_subscription_update():
+            _ctx, auth_response = _admin_context_or_response()
+            if auth_response is not None:
+                return auth_response
             data = request.get_json(silent=True) or request.form
             workspace_id = data.get("workspaceId") or request.args.get("workspaceId") or MOCK_WORKSPACE_ID
             plan_key = data.get("planKey") or data.get("plan") or "starter"
@@ -571,7 +713,19 @@ def register_clone_voice_routes(app):
         def clone_voice_workspace_upload_session():
             data = request.get_json(silent=True) or {}
             try:
+                workspace_id = str(data.get("workspaceId") or "").strip()
+                blocked = _smx_custom_voice_block_response(workspace_id)
+                if blocked is not None:
+                    return blocked
+
                 ctx = auth_context_from_request(request)
+                workspace_id = str(data.get("workspaceId") or ctx.workspace_id or "").strip()
+                require_workspace_access(ctx, workspace_id)
+                purpose = str(data.get("purpose") or "create").strip().lower()
+                assert_workspace_can_create_custom_voice(
+                    workspace_id,
+                    replacing=purpose == "replace",
+                )
                 payload = create_workspace_upload_session(
                     workspace_id=data.get("workspaceId"),
                     filename=data.get("filename"),
@@ -582,6 +736,8 @@ def register_clone_voice_routes(app):
                     purpose=data.get("purpose") or "create",
                 )
                 return jsonify(payload)
+            except QuotaExceededError as exc:
+                return _quota_error_response(exc)
             except VoiceSourceUploadError as exc:
                 return _error(str(exc), getattr(exc, "status_code", 400))
             except Exception as exc:
@@ -594,6 +750,9 @@ def register_clone_voice_routes(app):
             data = request.get_json(silent=True) or {}
             workspace_id = str(data.get("workspaceId") or "").strip()
             object_key = str(data.get("objectKey") or "").strip()
+            blocked = _smx_custom_voice_block_response(workspace_id)
+            if blocked is not None:
+                return blocked
             temp_dir = None
             try:
                 uploaded, local_path, temp_dir = download_completed_upload(
@@ -794,7 +953,9 @@ def register_clone_voice_routes(app):
         def my_voices():
             workspace_id = request.args.get("workspaceId", MOCK_WORKSPACE_ID)
             workspace = get_workspace(workspace_id)
-            voices = list_workspace_voice_parameters(workspace)
+            entitlement = custom_voice_entitlement(workspace.workspace_id)
+            stored_voices = list_workspace_voice_parameters(workspace)
+            voices = stored_voices if entitlement.get("allowed") and not entitlement.get("systemVoicesOnly") else []
 
             print("[clone_voice_controller] My saved voices:", voices, flush=True)
 
@@ -802,6 +963,8 @@ def register_clone_voice_routes(app):
                 "ok": True,
                 "workspaceId": workspace.workspace_id,
                 "voices": voices,
+                "customVoiceEntitlement": entitlement,
+                "lockedVoiceCount": max(0, len(stored_voices) - len(voices)),
             })
 
 
@@ -890,7 +1053,12 @@ def register_clone_voice_routes(app):
 
                 if is_recording or not existing_parameter:
                     try:
-                        assert_workspace_can_spend(workspace.workspace_id, "voice.parameter.saved", quantity=1)
+                        _preflight_custom_voice(workspace.workspace_id, replacing=False)
+                    except QuotaExceededError as exc:
+                        return _quota_error_response(exc)
+                else:
+                    try:
+                        assert_workspace_can_use_custom_voice(workspace.workspace_id)
                     except QuotaExceededError as exc:
                         return _quota_error_response(exc)
 
@@ -915,6 +1083,11 @@ def register_clone_voice_routes(app):
                 )
 
                 if is_recording or not preview_is_standard:
+                    if not parameter_created:
+                        try:
+                            _preflight_preview(workspace.workspace_id)
+                        except QuotaExceededError as exc:
+                            return _quota_error_response(exc)
                     _generate_standard_preview(voice_parameter, preview_path)
                     preview_created = True
                 else:
@@ -928,6 +1101,13 @@ def register_clone_voice_routes(app):
                     source_type="record" if is_recording else "upload",
                     parameter_path=param_path,
                     preview_path=preview_path,
+                    parameter_created=parameter_created,
+                    preview_created=preview_created,
+                )
+
+                _record_custom_voice_usage(
+                    workspace.workspace_id,
+                    voice_id,
                     parameter_created=parameter_created,
                     preview_created=preview_created,
                 )
@@ -1062,7 +1242,7 @@ def register_clone_voice_routes(app):
 
                 # replace voice source quota preflight
                 try:
-                    assert_workspace_can_spend(workspace.workspace_id, "voice.parameter.saved", quantity=1)
+                    _preflight_custom_voice(workspace.workspace_id, replacing=True)
                 except QuotaExceededError as exc:
                     return _quota_error_response(exc)
 
@@ -1088,6 +1268,13 @@ def register_clone_voice_routes(app):
                     source_type=existing.get("sourceType") or "upload",
                     parameter_path=param_path,
                     preview_path=preview_path,
+                    parameter_created=True,
+                    preview_created=True,
+                )
+
+                _record_custom_voice_usage(
+                    workspace.workspace_id,
+                    voice_id,
                     parameter_created=True,
                     preview_created=True,
                 )
@@ -1154,6 +1341,7 @@ def register_clone_voice_routes(app):
 
             try:
                 workspace = get_workspace(workspace_id)
+                assert_workspace_can_use_custom_voice(workspace.workspace_id)
                 voice_parameter, param_path = load_workspace_voice_parameter(workspace, voice_id)
                 metadata = load_voice_metadata(workspace, voice_id)
 
@@ -1195,6 +1383,8 @@ def register_clone_voice_routes(app):
                     "narrationStyleReason": style_info["styleReason"],
                 })
 
+            except QuotaExceededError as exc:
+                return _quota_error_response(exc)
             except Exception as exc:
                 print("[clone_voice_controller] from-saved error:", repr(exc), flush=True)
                 return _error(str(exc), 500)

@@ -960,6 +960,8 @@ if "billing_stripe_checkout_session" not in app.view_functions:
         workspace_id = data.get("workspaceId") or ctx.workspace_id
         plan_key = data.get("planKey") or data.get("plan") or "starter"
         customer_email = data.get("customerEmail") or data.get("customer_email") or ""
+        success_url = data.get("successUrl") or data.get("success_url") or ""
+        cancel_url = data.get("cancelUrl") or data.get("cancel_url") or ""
 
         try:
             require_workspace_access(ctx, workspace_id)
@@ -969,6 +971,8 @@ if "billing_stripe_checkout_session" not in app.view_functions:
                 plan_key=plan_key,
                 user_id=ctx.user_id,
                 customer_email=customer_email,
+                success_url=success_url,
+                cancel_url=cancel_url,
             )
 
             return jsonify({
@@ -1929,7 +1933,14 @@ if "paid_launch_billing_plans" not in app.view_functions:
                 "monthlyPrice": plan.get("monthlyPrice"),
                 "monthlyCredits": plan.get("monthlyCredits"),
                 "description": plan.get("description") or "",
-                "available": bool(get_stripe_price_for_plan(key)),
+                # These are valid customer-selectable paid plans.
+                # Stripe Checkout performs the authoritative runtime
+                # validation and supports both persistent Price IDs and
+                # the existing recurring inline-price fallback.
+                "available": bool(
+                    key in {"starter", "pro", "business"}
+                    and float(plan.get("monthlyPrice") or 0) > 0
+                ),
             })
 
         return jsonify({

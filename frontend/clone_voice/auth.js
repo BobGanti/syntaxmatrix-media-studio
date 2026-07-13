@@ -95,6 +95,15 @@
       if (!window.firebase.apps.length) window.firebase.initializeApp(config);
       const auth = window.firebase.auth();
 
+      // >>> SMX_AUTH_LOCAL_PERSISTENCE_FOR_STRIPE_RETURN >>>
+      // Keep the logged-in user authenticated across the external Stripe redirect.
+      try {
+        await auth.setPersistence(window.firebase.auth.Auth.Persistence.LOCAL);
+      } catch (error) {
+        console.warn("[SyntaxMatrix auth] Could not set local Firebase persistence:", error);
+      }
+      // <<< SMX_AUTH_LOCAL_PERSISTENCE_FOR_STRIPE_RETURN <<<
+
       auth.onAuthStateChanged(async (user) => {
         if (!user || redirecting) {
           if (!user) setStatus("Enter your email and password.", "info");
@@ -106,8 +115,17 @@
           const remember = action === "register" ? true : rememberMe.checked;
           setStatus("Securing your session and preparing your workspace...", "info");
           await createServerSession(user, remember);
-          await bootstrapAccountForUser(user);
-          const destination = action === "register" ? "/plans?onboarding=1" : nextUrl;
+          const bootstrap = await bootstrapAccountForUser(user);
+          const workspaceId = String(
+            bootstrap.defaultWorkspaceId ||
+            bootstrap.workspaceId ||
+            bootstrap.workspace?.workspaceId ||
+            ""
+          ).trim();
+          const registrationDestination = workspaceId
+            ? `/plans?onboarding=1&workspaceId=${encodeURIComponent(workspaceId)}`
+            : "/plans?onboarding=1";
+          const destination = action === "register" ? registrationDestination : nextUrl;
           setStatus("Account ready. Redirecting...", "success");
           window.location.assign(destination);
         } catch (error) {
@@ -186,3 +204,75 @@
 
   init();
 })();
+
+// >>> SMX_REAL_PASSWORD_EYE_BUTTON_JS >>>
+(() => {
+  "use strict";
+
+  const EYE_SVG = `
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </svg>
+  `;
+
+  const EYE_OFF_SVG = `
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 3l18 18"></path>
+      <path d="M10.7 5.2A10.7 10.7 0 0 1 12 5c6.5 0 10 7 10 7a18.6 18.6 0 0 1-3.1 4.3"></path>
+      <path d="M6.1 6.9A18.6 18.6 0 0 0 2 12s3.5 7 10 7c1.6 0 3-.4 4.2-1"></path>
+      <path d="M9.9 9.9A3 3 0 0 0 14.1 14.1"></path>
+    </svg>
+  `;
+
+  function prepareButton(button) {
+    if (!button) return;
+
+    const visible = button.dataset.visible === "true";
+    button.innerHTML = visible ? EYE_OFF_SVG : EYE_SVG;
+    button.setAttribute("aria-label", visible ? "Hide password" : "Show password");
+    button.setAttribute("title", visible ? "Hide password" : "Show password");
+  }
+
+  function bindPasswordEyes() {
+    document.querySelectorAll(".smx-real-password-eye").forEach((button) => {
+      prepareButton(button);
+
+      if (button.dataset.smxBound === "1") {
+        return;
+      }
+
+      button.dataset.smxBound = "1";
+
+      button.addEventListener("click", () => {
+        const wrap = button.closest(".smx-password-field");
+        const input = wrap ? wrap.querySelector("input") : null;
+
+        if (!input) return;
+
+        const nextVisible = input.type !== "text";
+
+        input.type = nextVisible ? "text" : "password";
+        button.dataset.visible = nextVisible ? "true" : "false";
+        prepareButton(button);
+
+        try {
+          input.focus({ preventScroll: true });
+        } catch (_) {
+          input.focus();
+        }
+      });
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bindPasswordEyes, { once: true });
+  } else {
+    bindPasswordEyes();
+  }
+
+  setTimeout(bindPasswordEyes, 150);
+  setTimeout(bindPasswordEyes, 600);
+})();
+// <<< SMX_REAL_PASSWORD_EYE_BUTTON_JS <<<
+

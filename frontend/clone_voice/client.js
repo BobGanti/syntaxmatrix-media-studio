@@ -1200,4 +1200,76 @@
   loadWorkspaces();
   loadSystemVoices();
   setMode("upload");
+
+
+
+  // >>> SMX_FREE_PLAN_SYSTEM_ONLY_UI >>>
+  let smxLatestPlanEntitlement = null;
+
+  function smxPlanBlocksCustomVoices(payload) {
+    const subscription = payload?.subscription || {};
+    const plan = payload?.plan || {};
+    const planKey = String(subscription.planKey || subscription.plan || plan.key || "").toLowerCase();
+
+    const rawSlots = subscription.maxCustomVoices ?? subscription.cloneSlots ?? plan.maxCustomVoices ?? plan.cloneSlots;
+    const slots = rawSlots === null || rawSlots === undefined || rawSlots === "" ? null : Number(rawSlots);
+
+    return (
+      planKey === "free" ||
+      subscription.systemVoicesOnly === true ||
+      plan.systemVoicesOnly === true ||
+      slots === 0
+    );
+  }
+
+  function smxLabelForMode(mode) {
+    const input = sourceModeInputs.find((item) => item.value === mode);
+    return input ? input.closest("label") : null;
+  }
+
+  function smxApplyFreePlanUi(payload) {
+    smxLatestPlanEntitlement = payload || smxLatestPlanEntitlement || {};
+
+    const customBlocked = smxPlanBlocksCustomVoices(smxLatestPlanEntitlement);
+
+    const createPanel = document.querySelector(".panel-create");
+    const savedLabel = smxLabelForMode("saved");
+    const uploadLabel = smxLabelForMode("upload");
+    const recordLabel = smxLabelForMode("record");
+
+    if (createPanel) {
+      createPanel.hidden = customBlocked;
+      createPanel.setAttribute("aria-hidden", customBlocked ? "true" : "false");
+    }
+
+    if (savedLabel) savedLabel.hidden = customBlocked;
+    if (uploadLabel) uploadLabel.hidden = customBlocked;
+    if (recordLabel) recordLabel.hidden = customBlocked;
+
+    if (customBlocked) {
+      if (savedPanel) savedPanel.classList.add("hidden");
+      if (uploadPanel) uploadPanel.classList.add("hidden");
+      if (recordPanel) recordPanel.classList.add("hidden");
+      if (voiceCreatePanel) voiceCreatePanel.classList.add("hidden");
+
+      const systemInput = sourceModeInputs.find((item) => item.value === "system");
+      if (systemInput && !systemInput.checked) {
+        systemInput.checked = true;
+      }
+
+      if (systemPanel) systemPanel.classList.remove("hidden");
+
+      if (savedVoicesList) {
+        savedVoicesList.textContent = "Custom saved voices are available on Starter, Pro and Business plans.";
+      }
+
+      loadSystemVoices();
+    }
+  }
+
+  window.addEventListener("smx:plan-entitlement", (event) => {
+    smxApplyFreePlanUi(event.detail || {});
+  });
+  // <<< SMX_FREE_PLAN_SYSTEM_ONLY_UI <<<
+
 })();

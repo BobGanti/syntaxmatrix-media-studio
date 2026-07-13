@@ -395,8 +395,10 @@ def _handle_subscription(subscription: Any, *, event_id: str, event_type: str) -
     plan_key = metadata.get("planKey") or metadata.get("plan") or "starter"
     status = _clean(_get(subscription, "status"), "active")
 
-    if event_type == "customer.subscription.deleted":
-        status = "canceled"
+    subscription_deleted = event_type == "customer.subscription.deleted"
+    if subscription_deleted:
+        plan_key = "free"
+        status = "active"
 
     if not workspace_id:
         workspace_id = _find_workspace_by_subscription_id(_get(subscription, "id", ""))
@@ -409,17 +411,45 @@ def _handle_subscription(subscription: Any, *, event_id: str, event_type: str) -
             "status": status,
         }
 
-    record = _upsert_workspace_subscription(
-        workspace_id=workspace_id,
-        plan_key=plan_key,
-        status=status,
-        stripe_customer_id=_get(subscription, "customer", ""),
-        stripe_subscription_id=_get(subscription, "id", ""),
-        event_id=event_id,
-        event_type=event_type,
-        current_period_start=_get(subscription, "current_period_start"),
-        current_period_end=_get(subscription, "current_period_end"),
-    )
+    if subscription_deleted:
+        records = _load_subscriptions()
+        previous = dict(records.get(workspace_id) or {})
+        free_plan = get_billing_plan_map().get("free") or {}
+        record = {
+            **previous,
+            "workspaceId": workspace_id,
+            "plan": "free",
+            "planKey": "free",
+            "planLabel": free_plan.get("label", "Free"),
+            "status": "active",
+            "provider": "internal",
+            "monthlyCredits": free_plan.get("monthlyCredits", 10),
+            "monthlyCreditLimit": free_plan.get("monthlyCredits", 10),
+            "monthlyPrice": 0.0,
+            "stripeCustomerId": _clean(_get(subscription, "customer")) or _clean(previous.get("stripeCustomerId")),
+            "stripeSubscriptionId": "",
+            "subscriptionId": "",
+            "checkoutSessionId": "",
+            "currentPeriodStart": None,
+            "currentPeriodEnd": None,
+            "lastStripeEventId": event_id,
+            "lastStripeEventType": event_type,
+            "updatedAt": _now(),
+        }
+        records[workspace_id] = record
+        _save_subscriptions(records)
+    else:
+        record = _upsert_workspace_subscription(
+            workspace_id=workspace_id,
+            plan_key=plan_key,
+            status=status,
+            stripe_customer_id=_get(subscription, "customer", ""),
+            stripe_subscription_id=_get(subscription, "id", ""),
+            event_id=event_id,
+            event_type=event_type,
+            current_period_start=_get(subscription, "current_period_start"),
+            current_period_end=_get(subscription, "current_period_end"),
+        )
 
     return {
         "action": "updated_from_subscription",

@@ -540,10 +540,10 @@ def _seed_default_subscription_for_workspace(
     workspace_id: str,
     user_id: str = "",
 ) -> None:
-    """Create one pending paid subscription record for a new workspace.
+    """Create the default active Free subscription for a new workspace.
 
     Existing records are never overwritten here. Stripe webhooks remain the
-    authority that changes the status to active/trialing after payment.
+    authority for paid Starter, Pro, Business, and Enterprise subscriptions.
     """
     workspace_id = _clean(workspace_id)
 
@@ -558,9 +558,9 @@ def _seed_default_subscription_for_workspace(
 
     set_workspace_plan(
         workspace_id=workspace_id,
-        plan_key="starter",
-        status="incomplete",
-        provider="stripe",
+        plan_key="free",
+        status="active",
+        provider="internal",
         subscription_id="",
     )
 

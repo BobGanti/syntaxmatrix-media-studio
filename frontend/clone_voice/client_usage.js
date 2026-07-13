@@ -179,7 +179,7 @@
             <div>
               <div class="smx-usage-kicker">Usage & Plan</div>
               <h2 class="smx-usage-title">Loading subscription usage...</h2>
-              <p class="smx-usage-subtitle">Your monthly generation credits and subscription status.</p>
+              <p class="smx-usage-subtitle">Your generation credits and subscription status.</p>
             </div>
             <div class="smx-usage-pill">Checking</div>
           </div>
@@ -190,7 +190,7 @@
               <div class="smx-usage-value" data-usage-plan data-plan-key="">—</div>
             </div>
             <div class="smx-usage-stat">
-              <div class="smx-usage-label">Used this month</div>
+              <div class="smx-usage-label">Used this period</div>
               <div class="smx-usage-value" data-usage-used>—</div>
             </div>
             <div class="smx-usage-stat">
@@ -267,13 +267,18 @@
     const subscription = payload.subscription || {};
     const usage = payload.usage || {};
 
-    const planLabel = subscription.planLabel || subscription.plan || subscription.planKey || "Starter";
-    const planKey = subscription.planKey || subscription.plan || "starter";
+    const planLabel = subscription.planLabel || subscription.plan || subscription.planKey || "Free";
+    const planKey = subscription.planKey || subscription.plan || "free";
     const status = subscription.status || "active";
     const used = normaliseNumber(usage.usedCredits) || 0;
-    const limit = normaliseNumber(usage.monthlyCreditLimit);
+    const limit = normaliseNumber(usage.creditLimit ?? usage.monthlyCreditLimit);
+    const periodLabel = usage.creditPeriodLabel || (usage.creditPeriod === "weekly" ? "week" : "month");
     const remaining = usage.remainingCredits;
     const allowed = payload.allowed !== false;
+
+    window.dispatchEvent(new CustomEvent("smx:plan-entitlement", {
+      detail: payload
+    }));
 
     const cls = statusClass(payload);
 
@@ -293,7 +298,7 @@
     if (upgradeButton) upgradeButton.textContent = hasStripeCustomer ? "Change plan" : "Choose a plan";
 
     if (title) title.textContent = allowed ? `${planLabel} plan` : "Payment required";
-    if (subtitle) subtitle.textContent = "Monthly generation credits for this workspace.";
+    if (subtitle) subtitle.textContent = `${periodLabel[0].toUpperCase()}${periodLabel.slice(1)}ly generation credits for this workspace.`;
 
     if (pill) {
       pill.className = `smx-usage-pill ${cls}`.trim();
@@ -328,7 +333,7 @@
       if (allowed) {
         const quotaText = limit === null
           ? "This workspace has unlimited monthly usage credits."
-          : `${formatCredits(remaining)} credits remaining this month.`;
+          : `${formatCredits(remaining)} credits remaining this ${periodLabel}.`;
 
         message.innerHTML = `<strong>Ready.</strong> ${escapeHtml(quotaText)}`;
       } else {

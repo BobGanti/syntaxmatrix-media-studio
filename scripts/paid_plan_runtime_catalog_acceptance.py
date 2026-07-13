@@ -114,11 +114,8 @@ def main() -> None:
         / "plans.js"
     ).read_text(encoding="utf-8")
 
-    assert (
-        '["starter", "pro", "business"]'
-        ".includes(key)"
-        in plans_source
-    )
+    assert '["free","starter","pro","business"].includes' in plans_source.replace(" ", "")
+    assert "/api/billing/free-plan" in plans_source
 
     deploy_source = (
         ROOT

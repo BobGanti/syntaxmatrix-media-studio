@@ -87,6 +87,23 @@ def _customer_email_for_workspace(workspace_id: str) -> str:
     return _clean(customer.get("billingEmail"))
 
 
+def _existing_stripe_customer_id(workspace_id: str) -> str:
+    try:
+        from services.subscription_enforcement import get_subscription_for_entitlement
+
+        subscription = get_subscription_for_entitlement(workspace_id)
+        if isinstance(subscription, dict):
+            customer_id = _clean(
+                subscription.get("stripeCustomerId")
+                or subscription.get("customerId")
+            )
+            if customer_id.startswith("cus_"):
+                return customer_id
+    except Exception:
+        pass
+    return ""
+
+
 def _existing_stripe_subscription(workspace_id: str) -> dict[str, Any] | None:
     try:
         from services.subscription_enforcement import get_subscription_for_entitlement
@@ -197,6 +214,7 @@ def create_stripe_checkout_session(
     stripe.api_key = _stripe_secret_key()
 
     app_url = _app_public_url()
+    existing_customer_id = _existing_stripe_customer_id(workspace_id)
     customer_email = _clean(customer_email) or _customer_email_for_workspace(workspace_id)
 
     metadata = {
@@ -213,6 +231,128 @@ def create_stripe_checkout_session(
         "mode": "subscription",
         "success_url": f"{app_url}/plans?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
         "cancel_url": f"{app_url}/plans?checkout=cancelled",
+        "client_reference_id": workspace_id,
+        "line_items": line_items,
+        "metadata": {
+            **metadata,
+            "pricingSource": pricing_source,
+        },
+        "subscription_data": {
+            "metadata": {
+                **metadata,
+                "pricingSource": pricing_source,
+            },
+        },
+        "allow_promotion_codes": True,
+    }
+
+    if existing_customer_id:
+        session_args["customer"] = existing_customer_id
+    elif customer_email:
+        session_args["customer_email"] = customer_email
+
+    session = stripe.checkout.Session.create(**session_args)
+
+    return {
+        "provider": "stripe",
+        "mode": "subscription",
+        "workspaceId": workspace_id,
+        "planKey": plan["key"],
+        "planLabel": plan["label"],
+        "monthlyPrice": plan.get("monthlyPrice"),
+        "monthlyCredits": monthly_credits,
+        "currency": _clean(get_pricing_config().get("currency"), "EUR").upper(),
+        "pricingSource": pricing_source,
+        "sessionId": getattr(session, "id", None) or session.get("id"),
+        "checkoutUrl": getattr(session, "url", None) or session.get("url"),
+        "status": getattr(session, "status", None) or session.get("status"),
+    }
+
+# >>> SMX_STRIPE_CHECKOUT_RETURN_URL_OVERRIDE >>>
+def _smx_same_origin_checkout_return_url(value: Any, app_url: str, fallback: str) -> str:
+    raw = _clean(value)
+
+    if not raw:
+        return fallback
+
+    if raw.startswith("/") and not raw.startswith("//"):
+        return f"{app_url}{raw}"
+
+    if raw == app_url or raw.startswith(f"{app_url}/"):
+        return raw
+
+    return fallback
+
+
+def _smx_append_checkout_session_id(url: str) -> str:
+    if "{CHECKOUT_SESSION_ID}" in url:
+        return url
+
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}session_id={{CHECKOUT_SESSION_ID}}"
+
+
+def create_stripe_checkout_session(
+    *,
+    workspace_id: str,
+    plan_key: str,
+    user_id: str,
+    customer_email: str = "",
+    success_url: str = "",
+    cancel_url: str = "",
+) -> dict[str, Any]:
+    workspace_id = _clean(workspace_id)
+    user_id = _clean(user_id, "unknown_user")
+
+    if not workspace_id:
+        raise StripeCheckoutError("workspaceId is required")
+
+    existing_subscription = _existing_stripe_subscription(workspace_id)
+
+    if existing_subscription:
+        raise StripeCheckoutError(
+            "This workspace already has a Stripe subscription. Use the billing portal to manage or change the plan."
+        )
+
+    plan = _plan_payload(plan_key)
+    monthly_credits = plan.get("monthlyCredits")
+
+    stripe = _load_stripe_module()
+    stripe.api_key = _stripe_secret_key()
+
+    app_url = _app_public_url()
+    customer_email = _clean(customer_email) or _customer_email_for_workspace(workspace_id)
+
+    default_success_url = (
+        f"{app_url}/tasks/clone-voice"
+        f"?workspaceId={workspace_id}"
+        f"&billing=success"
+    )
+    default_cancel_url = (
+        f"{app_url}/plans"
+        f"?workspaceId={workspace_id}"
+        f"&checkout=cancelled"
+    )
+
+    safe_success_url = _smx_append_checkout_session_id(
+        _smx_same_origin_checkout_return_url(success_url, app_url, default_success_url)
+    )
+    safe_cancel_url = _smx_same_origin_checkout_return_url(cancel_url, app_url, default_cancel_url)
+
+    metadata = {
+        "workspaceId": workspace_id,
+        "planKey": plan["key"],
+        "userId": user_id,
+        "monthlyCredits": "unlimited" if monthly_credits is None else str(monthly_credits),
+        "source": "syntaxmatrix_media_studio",
+    }
+
+    line_items, pricing_source = _checkout_line_items(plan, metadata)
+
+    session_args: dict[str, Any] = {
+        "mode": "subscription",
+        "success_url": safe_success_url,
+        "cancel_url": safe_cancel_url,
         "client_reference_id": workspace_id,
         "line_items": line_items,
         "metadata": {
@@ -246,4 +386,8 @@ def create_stripe_checkout_session(
         "sessionId": getattr(session, "id", None) or session.get("id"),
         "checkoutUrl": getattr(session, "url", None) or session.get("url"),
         "status": getattr(session, "status", None) or session.get("status"),
+        "successUrl": safe_success_url,
+        "cancelUrl": safe_cancel_url,
     }
+# <<< SMX_STRIPE_CHECKOUT_RETURN_URL_OVERRIDE <<<
+

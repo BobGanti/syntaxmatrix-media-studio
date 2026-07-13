@@ -189,6 +189,15 @@
     }
 
     const auth = window.firebase.auth();
+
+    // >>> SMX_BOOTSTRAP_LOCAL_PERSISTENCE_FOR_STRIPE_RETURN >>>
+    // Protected pages must preserve the logged-in Firebase user across Stripe redirects.
+    try {
+      await auth.setPersistence(window.firebase.auth.Auth.Persistence.LOCAL);
+    } catch (error) {
+      console.warn("[SyntaxMatrix auth] Could not set local Firebase persistence:", error);
+    }
+    // <<< SMX_BOOTSTRAP_LOCAL_PERSISTENCE_FOR_STRIPE_RETURN <<<
     const user = await waitForUser(auth);
 
     if (!user) {

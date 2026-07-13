@@ -4,192 +4,90 @@
   <meta charset="utf-8">
   <title>Finance Console</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="/clone_voice/billing.css?v=stripe-checkout-1">
+  <link rel="stylesheet" href="/clone_voice/billing.css?v=pricing-free-plan-1">
 </head>
 <body>
   <main class="shell">
     <header class="hero finance-hero">
       <p class="eyebrow">SyntaxMatrix Media Studio</p>
       <h1>Finance Console</h1>
-      <p>Manage subscriptions, credits, pricing, provider costs, and margin assumptions.</p>
-
-      <div class="hero-actions">
-        <a class="admin-link" href="/admin/clone-voice">← Clone Voice Admin</a>
-        <a class="client-link" href="/tasks/clone-voice">Open Client</a>
-      </div>
+      <p>Manage plan allowances, custom-voice limits, supplier costs, retail markup, and workspace usage.</p>
+      <div class="hero-actions"><a class="admin-link" href="/admin/clone-voice">← Clone Voice Admin</a><a class="client-link" href="/tasks/clone-voice">Open Client</a></div>
     </header>
 
     <section class="finance-panel panel-billing">
-      <div class="panel-heading">
-        <span class="panel-number">1</span>
-        <div>
-          <h2>Billing & subscription</h2>
-          <p>Monitor credits, usage, and estimated workspace economics.</p>
-        </div>
-      </div>
-
+      <div class="panel-heading"><span class="panel-number">1</span><div><h2>Workspace billing</h2><p>Monitor credits, subscription state, and supplier usage.</p></div></div>
       <div class="billing-grid">
-        <label>
-          Workspace
-          <select id="billingWorkspaceSelect">
-            <option value="mock_user_001">Client A / Workspace 001</option>
-            <option value="mock_user_002">Client B / Workspace 002</option>
-          </select>
-        </label>
-
-        <label>
-          Plan
-          <select id="billingPlanSelect">
-            <option value="starter">Starter</option>
-            <option value="pro">Pro</option>
-            <option value="business">Business</option>
-            <option value="enterprise">Enterprise</option>
-          </select>
-        </label>
-
+        <label>Workspace<select id="billingWorkspaceSelect"><option value="">Loading...</option></select></label>
+        <label>Plan<select id="billingPlanSelect"></select></label>
         <button id="saveBillingPlanBtn" type="button">Save plan</button>
         <button id="refreshBillingBtn" type="button" class="secondary">Refresh usage</button>
-        <button id="openStripeCheckoutBtn" type="button" class="stripe-cta">Open Stripe Checkout</button>
       </div>
-
       <div class="billing-cards">
-        <div class="metric-card">
-          <span class="metric-label">Current plan</span>
-          <strong id="billingCurrentPlan">—</strong>
-        </div>
-
-        <div class="metric-card">
-          <span class="metric-label">Monthly limit</span>
-          <strong id="billingMonthlyLimit">—</strong>
-        </div>
-
-        <div class="metric-card">
-          <span class="metric-label">Used</span>
-          <strong id="billingUsedCredits">—</strong>
-        </div>
-
-        <div class="metric-card">
-          <span class="metric-label">Remaining</span>
-          <strong id="billingRemainingCredits">—</strong>
-        </div>
-
-        <div class="metric-card">
-          <span class="metric-label">Monthly revenue</span>
-          <strong id="billingMonthlyRevenue">—</strong>
-        </div>
-
-        <div class="metric-card">
-          <span class="metric-label">Est. provider cost</span>
-          <strong id="billingEstimatedCost">—</strong>
-        </div>
-
-        <div class="metric-card">
-          <span class="metric-label">Est. margin</span>
-          <strong id="billingGrossMargin">—</strong>
-        </div>
-
-        <div class="metric-card">
-          <span class="metric-label">Margin %</span>
-          <strong id="billingMarginPercent">—</strong>
-        </div>
+        <div class="metric-card"><span class="metric-label">Current plan</span><strong id="billingCurrentPlan">—</strong></div>
+        <div class="metric-card"><span class="metric-label">Credit limit</span><strong id="billingMonthlyLimit">—</strong></div>
+        <div class="metric-card"><span class="metric-label">Used</span><strong id="billingUsedCredits">—</strong></div>
+        <div class="metric-card"><span class="metric-label">Remaining</span><strong id="billingRemainingCredits">—</strong></div>
+        <div class="metric-card"><span class="metric-label">Plan revenue</span><strong id="billingMonthlyRevenue">—</strong></div>
+        <div class="metric-card"><span class="metric-label">Supplier cost USD</span><strong id="billingEstimatedCost">—</strong></div>
+        <div class="metric-card"><span class="metric-label">Retail usage USD</span><strong id="billingRetailUsage">—</strong></div>
+        <div class="metric-card"><span class="metric-label">Credit period</span><strong id="billingCreditPeriod">—</strong></div>
       </div>
-
       <div id="billingStatusBox" class="status-box">Loading billing status...</div>
-
-      <h3>Usage breakdown</h3>
-      <div id="billingUsageBreakdown" class="usage-list">No usage loaded yet.</div>
+      <h3>Usage breakdown</h3><div id="billingUsageBreakdown" class="usage-list">No usage loaded yet.</div>
     </section>
 
     <section class="finance-panel panel-pricing">
-      <div class="panel-heading">
-        <span class="panel-number">2</span>
-        <div>
-          <h2>Pricing & cost management</h2>
-          <p>Manage customer prices, credit rules, and internal provider cost assumptions.</p>
-        </div>
-      </div>
+      <div class="panel-heading"><span class="panel-number">2</span><div><h2>Pricing and entitlement defaults</h2><p>Changes apply to future operations. Historical usage records retain their original rate snapshot.</p></div></div>
 
       <div class="pricing-subpanel">
-        <h3>Plan pricing</h3>
+        <h3>Supplier metering and retail conversion</h3>
         <div class="pricing-plan-grid">
-          <label>
-            Starter monthly price
-            <input id="starterMonthlyPrice" type="number" min="0" step="0.01">
-          </label>
-          <label>
-            Starter credits
-            <input id="starterMonthlyCredits" type="number" min="0" step="1">
-          </label>
-
-          <label>
-            Pro monthly price
-            <input id="proMonthlyPrice" type="number" min="0" step="0.01">
-          </label>
-          <label>
-            Pro credits
-            <input id="proMonthlyCredits" type="number" min="0" step="1">
-          </label>
-
-          <label>
-            Business monthly price
-            <input id="businessMonthlyPrice" type="number" min="0" step="0.01">
-          </label>
-          <label>
-            Business credits
-            <input id="businessMonthlyCredits" type="number" min="0" step="1">
-          </label>
-
-          <label>
-            Enterprise monthly price
-            <input id="enterpriseMonthlyPrice" type="number" min="0" step="0.01">
-          </label>
-          <label>
-            Enterprise credits
-            <input id="enterpriseMonthlyCredits" type="text" placeholder="Blank = unlimited">
-          </label>
+          <label>Voice enrolment cost (USD)<input id="voiceCloneCostUsd" type="number" min="0" step="0.000001"></label>
+          <label>TTS cost per 10,000 characters (USD)<input id="ttsCostPer10000CharactersUsd" type="number" min="0" step="0.000001"></label>
+          <label>Retail markup (%)<input id="retailMarkupPercent" type="number" min="0" step="0.01"></label>
+          <label>Retail value per credit (USD)<input id="retailValuePerCreditUsd" type="number" min="0.00000001" step="0.000001"></label>
         </div>
       </div>
 
       <div class="pricing-subpanel">
-        <h3>Credit consumption rules</h3>
-        <div class="pricing-rule-grid">
-          <label>
-            Voice creation credits
-            <input id="voiceParameterCredits" type="number" min="0" step="1">
-          </label>
-
-          <label>
-            Narration credits per second
-            <input id="narrationCreditsPerSecond" type="number" min="0" step="0.01">
-          </label>
+        <h3>Free plan</h3>
+        <div class="pricing-plan-grid">
+          <label>Weekly credits<input id="freeWeeklyCredits" type="number" min="0" step="1"></label>
+          <label>Reset weekday<select id="freeResetWeekday"><option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option><option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option></select></label>
+          <label>Reset hour UTC<input id="freeResetHourUtc" type="number" min="0" max="23" step="1"></label>
+          <label>Custom voice slots<input id="freeCloneSlots" type="number" min="0" max="0" value="0" readonly></label>
         </div>
       </div>
 
       <div class="pricing-subpanel">
-        <h3>Internal provider cost assumptions</h3>
-        <p class="status">Admin-only estimates. Update when Alibaba/OpenAI/Google provider pricing changes.</p>
-
-        <div class="pricing-rule-grid">
-          <label>
-            Voice creation provider cost
-            <input id="voiceProviderFixedCost" type="number" min="0" step="0.0001">
-          </label>
-
-          <label>
-            Narration provider cost per second
-            <input id="narrationProviderCostPerSecond" type="number" min="0" step="0.0001">
-          </label>
+        <h3>Paid plans</h3><p class="status">Monthly subscription prices are read-only here because live checkout uses Stripe Price IDs. Credits and clone slots remain admin-managed.</p>
+        <div class="pricing-plan-grid">
+          <label>Starter monthly price (Stripe)<input id="starterMonthlyPrice" type="number" min="0" step="0.01" readonly></label>
+          <label>Starter monthly credits<input id="starterMonthlyCredits" type="number" min="0" step="1"></label>
+          <label>Starter clone slots<input id="starterCloneSlots" type="number" min="0" step="1"></label>
+          <span></span>
+          <label>Pro monthly price (Stripe)<input id="proMonthlyPrice" type="number" min="0" step="0.01" readonly></label>
+          <label>Pro monthly credits<input id="proMonthlyCredits" type="number" min="0" step="1"></label>
+          <label>Pro clone slots<input id="proCloneSlots" type="number" min="0" step="1"></label>
+          <span></span>
+          <label>Business monthly price (Stripe)<input id="businessMonthlyPrice" type="number" min="0" step="0.01" readonly></label>
+          <label>Business monthly credits<input id="businessMonthlyCredits" type="number" min="0" step="1"></label>
+          <label>Business clone slots<input id="businessCloneSlots" type="number" min="0" step="1"></label>
+          <span></span>
+          <label>Enterprise monthly price (Stripe)<input id="enterpriseMonthlyPrice" type="number" min="0" step="0.01" readonly></label>
+          <label>Enterprise credits<input id="enterpriseMonthlyCredits" type="text" placeholder="Blank = unlimited"></label>
+          <label>Enterprise clone slots<input id="enterpriseCloneSlots" type="text" placeholder="Blank = unlimited"></label>
         </div>
       </div>
 
-      <button id="savePricingConfigBtn" type="button">Save pricing & costs</button>
+      <button id="savePricingConfigBtn" type="button">Save pricing and defaults</button>
       <div id="pricingStatusBox" class="status-box">Loading pricing configuration...</div>
     </section>
   </main>
-
   <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-auth-compat.js"></script>
-<script src="/auth_bootstrap.js?v=paid-launch-1"></script>
-<script src="/clone_voice/billing.js?v=stripe-checkout-1"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-auth-compat.js"></script>
+  <script src="/auth_bootstrap.js?v=auth-eye-stripe-return-20260713-101159"></script>
+  <script src="/clone_voice/billing.js?v=pricing-free-plan-1"></script>
 </body>
 </html>

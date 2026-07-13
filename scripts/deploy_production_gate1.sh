@@ -128,6 +128,7 @@ python -m compileall -q .
 python -m scripts.gate1_acceptance
 python -m scripts.production_acceptance
 python -m scripts.paid_launch_acceptance
+python -m scripts.pricing_free_plan_acceptance
 
 # One image build.
 gcloud builds submit . \

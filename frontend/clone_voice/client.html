@@ -240,8 +240,313 @@
 
   <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-auth-compat.js"></script>
-<script src="/auth_bootstrap.js?v=paid-launch-1"></script>
-<script src="/clone_voice/client.js?v=gate1-final-20260711"></script>
-  <script src="/clone_voice/client_usage.js?v=paid-launch-1" defer></script>
+<script src="/auth_bootstrap.js?v=auth-eye-stripe-return-20260713-101159"></script>
+<script src="/clone_voice/client.js?v=free-system-only-1"></script>
+  <script src="/clone_voice/client_usage.js?v=pricing-free-plan-1" defer></script>
+  <script src="/clone_voice/client_plan_entitlements.js?v=pricing-free-plan-1" defer></script>
+
+
+
+
+<!-- >>> SMX_FREE_PLAN_STRICT_SYSTEM_ONLY_V2 >>>
+<style>
+  body.smx-entitlement-pending .panel-create,
+  body.smx-entitlement-pending #voiceCreatePanel,
+  body.smx-entitlement-pending #uploadPanel,
+  body.smx-entitlement-pending #recordPanel,
+  body.smx-entitlement-pending #savedPanel,
+  body.smx-free-system-only .panel-create,
+  body.smx-free-system-only #voiceCreatePanel,
+  body.smx-free-system-only #uploadPanel,
+  body.smx-free-system-only #recordPanel,
+  body.smx-free-system-only #savedPanel {
+    display: none !important;
+  }
+</style>
+
+<script>
+(function () {
+  "use strict";
+
+  document.body.classList.add("smx-entitlement-pending");
+
+  let latestPayload = null;
+  let refreshClicked = false;
+
+  function norm(text) {
+    return String(text || "").replace(/\s+/g, " ").trim();
+  }
+
+  function lower(text) {
+    return norm(text).toLowerCase();
+  }
+
+  function workspaceId() {
+    const byId = document.querySelector("#workspaceSelect");
+    if (byId && byId.value) return byId.value;
+
+    const named = document.querySelector('select[name="workspaceId"]');
+    if (named && named.value) return named.value;
+
+    const firstSelect = document.querySelector("select");
+    if (firstSelect && firstSelect.value) return firstSelect.value;
+
+    const params = new URLSearchParams(window.location.search);
+    return params.get("workspaceId") || params.get("workspace") || "";
+  }
+
+  function all(selector) {
+    return Array.from(document.querySelectorAll(selector));
+  }
+
+  function hide(node) {
+    if (!node) return;
+    node.hidden = true;
+    node.style.display = "none";
+    node.setAttribute("aria-hidden", "true");
+  }
+
+  function show(node) {
+    if (!node) return;
+    node.hidden = false;
+    node.style.display = "";
+    node.removeAttribute("aria-hidden");
+    node.classList.remove("hidden");
+  }
+
+  function labelForInputValue(value) {
+    const input = document.querySelector(`input[name="sourceMode"][value="${value}"]`);
+    if (!input) return null;
+    return input.closest("label") || input.parentElement;
+  }
+
+  function findTextNodeContainer(textNeedle) {
+    const wanted = lower(textNeedle);
+
+    for (const node of all("label, button, div, section, article, h1, h2, h3, h4, p, span")) {
+      if (lower(node.textContent) === wanted || lower(node.textContent).includes(wanted)) {
+        return node;
+      }
+    }
+
+    return null;
+  }
+
+  function closestPanel(node) {
+    let current = node;
+
+    for (let i = 0; current && i < 8; i += 1) {
+      if (
+        current.matches &&
+        (
+          current.matches("section, article") ||
+          current.className.toString().toLowerCase().includes("panel") ||
+          current.className.toString().toLowerCase().includes("card") ||
+          current.className.toString().toLowerCase().includes("step")
+        )
+      ) {
+        return current;
+      }
+
+      current = current.parentElement;
+    }
+
+    return node ? node.parentElement : null;
+  }
+
+  function hideCreateVoicePanel() {
+    const createHeading = findTextNodeContainer("Create Voice");
+    const panel = closestPanel(createHeading);
+
+    if (panel) hide(panel);
+
+    hide(document.querySelector(".panel-create"));
+    hide(document.querySelector("#voiceCreatePanel"));
+    hide(document.querySelector("#uploadPanel"));
+    hide(document.querySelector("#recordPanel"));
+  }
+
+  function hideSavedVoiceOption() {
+    hide(labelForInputValue("saved"));
+
+    const savedText = findTextNodeContainer("My saved voices");
+    const savedLabel = savedText ? savedText.closest("label") || savedText : null;
+    hide(savedLabel);
+
+    hide(document.querySelector("#savedPanel"));
+  }
+
+  function forceSystemVoices() {
+    const systemInput = document.querySelector('input[name="sourceMode"][value="system"]');
+
+    if (systemInput) {
+      const systemLabel = systemInput.closest("label") || systemInput.parentElement;
+      show(systemLabel);
+
+      if (!systemInput.checked) {
+        systemInput.checked = true;
+        systemInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }
+
+    show(document.querySelector("#systemPanel"));
+
+    const systemText = findTextNodeContainer("System voices");
+    const systemLabel = systemText ? systemText.closest("label") || systemText : null;
+    show(systemLabel);
+  }
+
+  function replaceFreePlanText() {
+    const replacements = [
+      ["Monthly generation credits for this workspace.", "Weekly generation credits for this workspace."],
+      ["USED THIS MONTH", "USED THIS WEEK"],
+      ["Used this month", "Used this week"],
+      ["used this month", "used this week"],
+      ["credits remaining this month", "credits remaining this week"],
+      ["Select a saved workspace voice or a system voice for narration.", "Select a system voice for narration."]
+    ];
+
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      let value = node.nodeValue;
+
+      for (const item of replacements) {
+        value = value.split(item[0]).join(item[1]);
+      }
+
+      node.nodeValue = value;
+    }
+  }
+
+  function visiblePlanLooksFree() {
+    const text = lower(document.body.textContent);
+    return text.includes("free plan") || text.includes("plan free") || text.includes("free:");
+  }
+
+  function payloadBlocksCustomVoices(payload) {
+    const sub = payload && payload.subscription || {};
+    const plan = payload && payload.plan || {};
+    const features = payload && payload.features || {};
+
+    const planKey = lower(sub.planKey || sub.plan || plan.key || "");
+    const systemOnly = sub.systemVoicesOnly === true || plan.systemVoicesOnly === true || features.systemVoicesOnly === true;
+
+    const rawSlots = sub.maxCustomVoices ?? sub.cloneSlots ?? plan.maxCustomVoices ?? plan.cloneSlots ?? features.cloneSlots;
+    const slots = rawSlots === null || rawSlots === undefined || rawSlots === "" ? null : Number(rawSlots);
+
+    return planKey === "free" || systemOnly || slots === 0;
+  }
+
+  function applyFreeUi() {
+    document.body.classList.remove("smx-entitlement-pending");
+    document.body.classList.add("smx-free-system-only");
+
+    hideCreateVoicePanel();
+    hideSavedVoiceOption();
+    forceSystemVoices();
+    replaceFreePlanText();
+  }
+
+  function clearPendingForPaid() {
+    document.body.classList.remove("smx-entitlement-pending");
+  }
+
+  function findRefreshUsageButton() {
+    for (const button of all("button, a")) {
+      if (lower(button.textContent).includes("refresh usage")) {
+        return button;
+      }
+    }
+
+    return document.querySelector("#refreshUsageButton, [data-action='refresh-usage']");
+  }
+
+  function autoRefreshUsageOnce() {
+    const button = findRefreshUsageButton();
+
+    if (!button || refreshClicked) return;
+
+    refreshClicked = true;
+    button.click();
+  }
+
+  async function fetchEntitlement() {
+    const ws = workspaceId();
+
+    if (!ws) return null;
+
+    const url = `/api/billing/entitlement?workspaceId=${encodeURIComponent(ws)}&action=narration.generated&requestedCredits=0&t=${Date.now()}`;
+
+    const response = await fetch(url, {
+      cache: "no-store",
+      credentials: "same-origin"
+    });
+
+    return await response.json();
+  }
+
+  async function resolvePlanAndApply() {
+    autoRefreshUsageOnce();
+
+    if (visiblePlanLooksFree()) {
+      applyFreeUi();
+    }
+
+    try {
+      const payload = await fetchEntitlement();
+      latestPayload = payload;
+
+      if (payloadBlocksCustomVoices(payload)) {
+        applyFreeUi();
+      } else {
+        clearPendingForPaid();
+      }
+    } catch (error) {
+      if (visiblePlanLooksFree()) {
+        applyFreeUi();
+      }
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", resolvePlanAndApply);
+
+  window.addEventListener("smx:plan-entitlement", function (event) {
+    latestPayload = event.detail || latestPayload;
+
+    if (payloadBlocksCustomVoices(latestPayload)) {
+      applyFreeUi();
+    } else {
+      clearPendingForPaid();
+    }
+  });
+
+  document.addEventListener("change", function (event) {
+    if (event.target && (event.target.id === "workspaceSelect" || event.target.matches("select"))) {
+      refreshClicked = false;
+      document.body.classList.add("smx-entitlement-pending");
+      setTimeout(resolvePlanAndApply, 50);
+    }
+  });
+
+  const observer = new MutationObserver(function () {
+    if (document.body.classList.contains("smx-free-system-only") || visiblePlanLooksFree()) {
+      applyFreeUi();
+    }
+  });
+
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    characterData: true
+  });
+
+  setTimeout(resolvePlanAndApply, 50);
+  setTimeout(resolvePlanAndApply, 400);
+  setTimeout(resolvePlanAndApply, 1200);
+})();
+</script>
+<!-- <<< SMX_FREE_PLAN_STRICT_SYSTEM_ONLY_V2 <<< -->
+
 </body>
 </html>

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Account | SyntaxMatrix Media Studio</title>
-  <link rel="stylesheet" href="/auth.css?v=paid-launch-1" />
+  <link rel="stylesheet" href="/auth.css?v=password-eye-no-freeze-20260713-113446" />
 </head>
 <body>
   <main class="auth-shell">
@@ -24,7 +24,7 @@
 
       <form id="signInForm" class="auth-form" autocomplete="on">
         <label>Email<input id="signInEmail" name="email" type="email" autocomplete="email" required /></label>
-        <label>Password<input id="signInPassword" name="password" type="password" autocomplete="current-password" minlength="6" required /></label>
+        <label>Password<span class="smx-password-field"><input id="signInPassword" name="password" type="password" autocomplete="current-password" minlength="6" required /><button type="button" class="smx-real-password-eye" data-visible="false" aria-label="Show password" title="Show password"></button></span></label>
         <div class="auth-options">
           <label class="checkbox-row"><input id="rememberMe" type="checkbox" checked /> <span>Remember me</span></label>
           <button id="resetPasswordButton" class="link-button" type="button">Forgot password?</button>
@@ -34,8 +34,8 @@
 
       <form id="registerForm" class="auth-form hidden" autocomplete="on">
         <label>Email<input id="registerEmail" name="email" type="email" autocomplete="email" required /></label>
-        <label>Password<input id="registerPassword" name="new-password" type="password" autocomplete="new-password" minlength="8" required /></label>
-        <label>Confirm password<input id="confirmPassword" name="confirm-password" type="password" autocomplete="new-password" minlength="8" required /></label>
+        <label>Password<span class="smx-password-field"><input id="registerPassword" name="new-password" type="password" autocomplete="new-password" minlength="8" required /><button type="button" class="smx-real-password-eye" data-visible="false" aria-label="Show password" title="Show password"></button></span></label>
+        <label>Confirm password<span class="smx-password-field"><input id="confirmPassword" name="confirm-password" type="password" autocomplete="new-password" minlength="8" required /><button type="button" class="smx-real-password-eye" data-visible="false" aria-label="Show password" title="Show password"></button></span></label>
         <p class="form-note">After registration, choose a paid plan to activate voice creation and narration.</p>
         <button id="registerButton" class="primary-button" type="submit">Create account</button>
       </form>
@@ -46,6 +46,12 @@
 
   <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-auth-compat.js"></script>
-  <script src="/auth.js?v=paid-launch-1"></script>
+  <script src="/auth.js?v=password-eye-no-freeze-20260713-113446"></script>
+
+
+
+
+
+
 </body>
 </html>

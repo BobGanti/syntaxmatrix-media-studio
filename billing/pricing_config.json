@@ -1,11 +1,49 @@
 {
   "currency": "EUR",
+  "supplierCurrency": "USD",
+  "metering": {
+    "voiceCloneCostUsd": 0.01,
+    "ttsCostPer10000CharactersUsd": 0.115,
+    "retailMarkupPercent": 100.0,
+    "retailValuePerCreditUsd": 0.005
+  },
+  "freePlan": {
+    "weeklyCredits": 10,
+    "resetWeekday": 0,
+    "resetHourUtc": 0,
+    "rollover": false,
+    "enabled": true,
+    "resetMinuteUtc": 0,
+    "resetTimezone": "UTC",
+    "maxCustomVoices": 0,
+    "cloneSlots": 0,
+    "systemVoicesOnly": true
+  },
   "plans": [
+    {
+      "key": "free",
+      "label": "Free",
+      "monthlyPrice": 0.0,
+      "monthlyCredits": null,
+      "weeklyCredits": 10,
+      "creditPeriod": "week",
+      "maxCustomVoices": 0,
+      "cloneSlots": 0,
+      "systemVoicesOnly": true,
+      "enabled": true,
+      "description": "Try narration with system voices. Credits reset weekly."
+    },
     {
       "key": "starter",
       "label": "Starter",
       "monthlyPrice": 9.0,
       "monthlyCredits": 1000,
+      "weeklyCredits": null,
+      "creditPeriod": "month",
+      "maxCustomVoices": 1,
+      "cloneSlots": 1,
+      "systemVoicesOnly": false,
+      "enabled": true,
       "description": "Small team / early usage plan."
     },
     {
@@ -13,6 +51,12 @@
       "label": "Pro",
       "monthlyPrice": 29.0,
       "monthlyCredits": 5000,
+      "weeklyCredits": null,
+      "creditPeriod": "month",
+      "maxCustomVoices": 3,
+      "cloneSlots": 3,
+      "systemVoicesOnly": false,
+      "enabled": true,
       "description": "Regular narration and voice generation."
     },
     {
@@ -20,6 +64,12 @@
       "label": "Business",
       "monthlyPrice": 99.0,
       "monthlyCredits": 20000,
+      "weeklyCredits": null,
+      "creditPeriod": "month",
+      "maxCustomVoices": 10,
+      "cloneSlots": 10,
+      "systemVoicesOnly": false,
+      "enabled": true,
       "description": "Higher usage with multiple workspaces and users."
     },
     {
@@ -27,39 +77,97 @@
       "label": "Enterprise",
       "monthlyPrice": 0.0,
       "monthlyCredits": null,
+      "weeklyCredits": null,
+      "creditPeriod": "monthly",
+      "maxCustomVoices": null,
+      "cloneSlots": null,
+      "systemVoicesOnly": false,
+      "enabled": true,
       "description": "Contract pricing, limits, and governance."
+    }
+  ],
+  "retailMarkupPercent": 100.0,
+  "retailUsdPerCredit": 0.005,
+  "retailValuePerCreditUsd": 0.005,
+  "supplierMetering": {
+    "voiceCloneCostUsd": 0.01,
+    "ttsCostUsdPer10000Characters": 0.115,
+    "standardPreviewCharacters": 103
+  },
+  "supplierCostRules": [
+    {
+      "eventType": "voice.clone.succeeded",
+      "unit": "event",
+      "fixedCostUsd": 0.01,
+      "costPerUnitUsd": 0.0,
+      "description": "Qwen voice enrollment after a successful custom voice clone."
+    },
+    {
+      "eventType": "voice.preview.generated",
+      "unit": "character",
+      "fixedCostUsd": 0.0,
+      "costPerUnitUsd": 1.15e-05,
+      "description": "Qwen TTS preview narration, billed by submitted character."
+    },
+    {
+      "eventType": "narration.generated",
+      "unit": "character",
+      "fixedCostUsd": 0.0,
+      "costPerUnitUsd": 1.15e-05,
+      "description": "Qwen TTS script narration, billed by submitted character."
     }
   ],
   "creditRules": [
     {
       "eventType": "voice.parameter.saved",
       "unit": "event",
-      "creditsPerUnit": 25,
-      "minimumCredits": 25,
-      "description": "Creating or replacing a saved voice parameter."
+      "creditsPerUnit": 5,
+      "minimumCredits": 5,
+      "description": "Combined successful clone and standard preview charge."
+    },
+    {
+      "eventType": "voice.clone.succeeded",
+      "unit": "event",
+      "creditsPerUnit": 4,
+      "minimumCredits": 4,
+      "description": "Successful custom voice clone charge."
+    },
+    {
+      "eventType": "voice.preview.generated",
+      "unit": "character",
+      "creditsPerUnit": 0.0046,
+      "minimumCredits": 1,
+      "description": "Preview generation charged by submitted characters."
     },
     {
       "eventType": "narration.generated",
-      "unit": "second",
-      "creditsPerUnit": 1,
+      "unit": "character",
+      "creditsPerUnit": 0.0046,
       "minimumCredits": 1,
-      "description": "Final narration audio generation, charged by generated audio second."
+      "description": "Narration generation charged by submitted characters."
     }
   ],
   "providerCostRules": [
     {
-      "eventType": "voice.parameter.saved",
+      "eventType": "voice.clone.succeeded",
       "unit": "event",
-      "fixedCost": 0.5,
+      "fixedCost": 0.01,
       "costPerUnit": 0.0,
-      "description": "Internal estimated provider cost for creating/replacing a voice parameter and preview. Placeholder; update with real provider pricing."
+      "description": "Qwen voice enrollment after a successful custom voice clone."
+    },
+    {
+      "eventType": "voice.preview.generated",
+      "unit": "character",
+      "fixedCost": 0.0,
+      "costPerUnit": 1.15e-05,
+      "description": "Qwen TTS preview narration, billed by submitted character."
     },
     {
       "eventType": "narration.generated",
-      "unit": "second",
+      "unit": "character",
       "fixedCost": 0.0,
-      "costPerUnit": 0.004,
-      "description": "Internal estimated provider cost per generated narration second. Placeholder; update with real provider pricing."
+      "costPerUnit": 1.15e-05,
+      "description": "Qwen TTS script narration, billed by submitted character."
     }
   ]
 }

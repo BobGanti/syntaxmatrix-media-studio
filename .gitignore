@@ -125,3 +125,4 @@ billing/stripe_price_map.json
 # Local object storage runtime files
 object_storage/
 *.zip
+# SyntaxMatrix local runtime state - do not ship test/mock runtime data
