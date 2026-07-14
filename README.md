@@ -26,7 +26,7 @@
 ## ARRCCHH
 <p align="center">
   <img
-    src="docs/screenshots/01-client-workspace.png"
+    src="docs/media/screenshots/01-client-workspace.png"
     alt="SyntaxMatrix Media Studio client workspace"
     width="100%"
   >
