@@ -425,3 +425,100 @@ def stripe_price_catalog_status_payload() -> dict[str, Any]:
         "configuredPlans": configured_plans,
         "usingPersistentPrices": bool(configured_plans),
     }
+
+# >>> SMX_STRIPE_PRICE_MAP_PROVIDER_IDS_ONLY >>>
+def _smx_clean_text(value, fallback=""):
+    value = str(value or "").strip()
+    return value or fallback
+
+
+def _smx_walk_price_map(node, plan_key, inherited_plan=""):
+    plan_key = _smx_clean_text(plan_key).lower()
+
+    if isinstance(node, dict):
+        current_plan = _smx_clean_text(
+            node.get("planKey")
+            or node.get("plan_key")
+            or node.get("plan")
+            or inherited_plan
+        ).lower()
+
+        for key in ["priceId", "price_id", "livePriceId", "live_price_id", "testPriceId", "test_price_id"]:
+            price_id = _smx_clean_text(node.get(key))
+
+            if price_id and current_plan == plan_key:
+                return price_id
+
+        for key, value in node.items():
+            next_plan = current_plan
+
+            if isinstance(key, str) and key.lower() == plan_key:
+                next_plan = plan_key
+
+            found = _smx_walk_price_map(value, plan_key, next_plan)
+
+            if found:
+                return found
+
+    elif isinstance(node, list):
+        for value in node:
+            found = _smx_walk_price_map(value, plan_key, inherited_plan)
+
+            if found:
+                return found
+
+    return ""
+
+
+def smx_stripe_price_id_for_plan(plan_key):
+    from services.billing_pricing import smx_stripe_price_map
+
+    return _smx_walk_price_map(smx_stripe_price_map(), plan_key)
+
+
+def get_stripe_price_for_plan(plan_key):
+    from services.billing_pricing import (
+        smx_get_plan,
+        smx_plan_currency,
+        smx_plan_monthly_minor_amount,
+    )
+
+    plan_key = _smx_clean_text(plan_key).lower()
+    price_id = smx_stripe_price_id_for_plan(plan_key)
+
+    if not price_id:
+        return None
+
+    plan = smx_get_plan(plan_key)
+    amount = smx_plan_monthly_minor_amount(plan_key)
+
+    return {
+        "planKey": plan_key,
+        "priceId": price_id,
+        "active": True,
+        "source": "stripe_price_map.provider_id_plus_pricing_config",
+        "currency": smx_plan_currency(plan),
+        "unitAmount": amount,
+    }
+
+
+def stripe_price_catalog_status_payload():
+    from services.billing_pricing import smx_pricing_source_summary, smx_stripe_price_map
+
+    price_map = smx_stripe_price_map()
+    plans = price_map.get("plans") if isinstance(price_map, dict) else {}
+
+    mapped = {}
+
+    if isinstance(plans, dict):
+        for plan_key in sorted(plans):
+            mapped[plan_key] = get_stripe_price_for_plan(plan_key)
+
+    return {
+        "ok": True,
+        "source": "stripe_price_map.provider_ids_only",
+        "stripeMode": price_map.get("stripeMode") if isinstance(price_map, dict) else "",
+        "pricingSource": smx_pricing_source_summary(),
+        "mappedPlans": mapped,
+    }
+# <<< SMX_STRIPE_PRICE_MAP_PROVIDER_IDS_ONLY <<<

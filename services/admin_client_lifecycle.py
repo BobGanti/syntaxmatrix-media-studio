@@ -1500,17 +1500,12 @@ def _smx_price_amount_plan(price: Any) -> str:
     except Exception:
         amount_int = -1
 
-    # Launch retail prices. Stripe stores EUR cents.
-    amount_map = {
-        900: "starter",
-        2900: "pro",
-        9900: "business",
-    }
+    try:
+        from services.billing_pricing import smx_plan_key_from_monthly_minor_amount
 
-    if amount_int in amount_map and currency in {"eur", ""}:
-        return amount_map[amount_int]
-
-    return ""
+        return smx_plan_key_from_monthly_minor_amount(amount_int, currency or "eur") or ""
+    except Exception:
+        return ""
 
 
 def _smx_price_text_plan(price: Any, subscription: Any = None) -> str:
@@ -1609,3 +1604,18 @@ def _plan_from_subscription(subscription: Any) -> str:
 
     return ""
 # <<< SMX_STRIPE_PRICE_PLAN_RESOLVER_FIX >>>
+
+# >>> SMX_ADMIN_CENTRAL_PRICING_RESOLVER >>>
+def _plan_from_subscription(subscription: Any) -> str:
+    try:
+        from services.billing_pricing import smx_plan_key_from_stripe_subscription
+
+        return smx_plan_key_from_stripe_subscription(subscription) or ""
+    except Exception:
+        metadata = getattr(subscription, "metadata", None) or {}
+
+        if isinstance(metadata, dict):
+            return _clean(metadata.get("planKey") or metadata.get("plan_key") or metadata.get("plan"))
+
+    return ""
+# <<< SMX_ADMIN_CENTRAL_PRICING_RESOLVER <<<

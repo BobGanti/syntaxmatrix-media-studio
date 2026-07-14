@@ -136,3 +136,6 @@ patches/*
 reports/cleanup_archive/
 workspaces/mock_user_001/
 workspaces/mock_user_002/
+
+txt_sources/
+README2.md

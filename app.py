@@ -2673,3 +2673,79 @@ def smx_billing_checkout_reconcile():
     except AdminClientLifecycleError as exc:
         return _smx_json_error(exc.message, exc.status_code, **exc.payload)
 # <<< SMX_ADMIN_CLIENT_LIFECYCLE_ROUTES <<<
+
+# >>> SMX_CUSTOMER_CHECKOUT_AUTO_RECONCILE >>>
+@app.post("/api/billing/checkout/reconcile")
+def smx_customer_checkout_auto_reconcile():
+    """Customer-facing checkout return reconciliation.
+
+    This is intentionally separate from the admin reconcile tool.
+    Successful Stripe Checkout must update the local workspace without
+    requiring admin action.
+    """
+    from flask import jsonify, request
+
+    try:
+        payload = request.get_json(silent=True) or {}
+
+        stripe_id = (
+            payload.get("sessionId")
+            or payload.get("session_id")
+            or payload.get("checkoutSessionId")
+            or payload.get("stripeId")
+            or payload.get("stripe_id")
+            or ""
+        )
+
+        workspace_id = (
+            payload.get("workspaceId")
+            or payload.get("workspace_id")
+            or request.args.get("workspaceId")
+            or request.args.get("workspace_id")
+            or ""
+        )
+
+        stripe_id = str(stripe_id or "").strip()
+        workspace_id = str(workspace_id or "").strip()
+
+        if not stripe_id:
+            return jsonify({
+                "ok": False,
+                "error": "missing_stripe_id",
+                "message": "Missing Stripe checkout session ID.",
+            }), 400
+
+        if not workspace_id:
+            return jsonify({
+                "ok": False,
+                "error": "missing_workspace_id",
+                "message": "Missing workspace ID.",
+            }), 400
+
+        from services.admin_client_lifecycle import reconcile_stripe_identifier
+
+        result = reconcile_stripe_identifier(
+            stripe_id=stripe_id,
+            workspace_id=workspace_id,
+            actor_user_id="customer_checkout_return",
+        )
+
+        return jsonify({
+            "ok": True,
+            "reconciled": True,
+            "workspaceId": workspace_id,
+            "stripeId": stripe_id,
+            "result": result,
+        })
+
+    except Exception as exc:
+        status_code = int(getattr(exc, "status_code", 500) or 500)
+
+        return jsonify({
+            "ok": False,
+            "reconciled": False,
+            "error": exc.__class__.__name__,
+            "message": str(exc),
+        }), status_code
+# <<< SMX_CUSTOMER_CHECKOUT_AUTO_RECONCILE <<<
+

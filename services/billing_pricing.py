@@ -825,3 +825,326 @@ def retail_cost_usd(event_type, quantity=1):
 def credits_for_event(event_type, quantity=1):
     return int(calculate_event_charge(event_type, quantity).get("credits") or 0)
 # <<< SMX_COMPOSITE_CLONE_PREVIEW_EVENT <<<
+
+# >>> SMX_PRICING_SINGLE_SOURCE_OF_TRUTH >>>
+def smx_pricing_config_path():
+    from pathlib import Path
+    return Path(__file__).resolve().parents[1] / "billing" / "pricing_config.json"
+
+
+def smx_stripe_price_map_path():
+    from pathlib import Path
+    return Path(__file__).resolve().parents[1] / "billing" / "stripe_price_map.json"
+
+
+def smx_load_json_file(path, default):
+    import json
+
+    try:
+        if not path.exists():
+            return default
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def smx_pricing_config():
+    return smx_load_json_file(smx_pricing_config_path(), {})
+
+
+def smx_stripe_price_map():
+    return smx_load_json_file(smx_stripe_price_map_path(), {})
+
+
+def smx_clean_text(value, fallback=""):
+    value = str(value or "").strip()
+    return value or fallback
+
+
+def smx_decimal(value, fallback="0"):
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        text = str(value).replace(",", "").replace("€", "").replace("$", "").strip()
+        if not text:
+            text = str(fallback)
+        return Decimal(text)
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal(str(fallback))
+
+
+def smx_known_plan_keys():
+    return {"free", "starter", "pro", "business", "enterprise"}
+
+
+def smx_plan_records():
+    config = smx_pricing_config()
+    plans = config.get("plans") if isinstance(config, dict) else None
+
+    rows = []
+
+    if isinstance(plans, list):
+        for row in plans:
+            if isinstance(row, dict):
+                key = smx_clean_text(row.get("key") or row.get("planKey") or row.get("plan")).lower()
+                if key:
+                    copy = dict(row)
+                    copy.setdefault("key", key)
+                    rows.append(copy)
+
+    elif isinstance(plans, dict):
+        for key, row in plans.items():
+            if isinstance(row, dict):
+                copy = dict(row)
+                copy.setdefault("key", str(key).lower())
+                rows.append(copy)
+
+    return rows
+
+
+def smx_get_plan(plan_key):
+    plan_key = smx_clean_text(plan_key).lower()
+
+    for plan in smx_plan_records():
+        if smx_clean_text(plan.get("key") or plan.get("planKey") or plan.get("plan")).lower() == plan_key:
+            return plan
+
+    return {}
+
+
+def smx_config_currency():
+    config = smx_pricing_config()
+    return smx_clean_text(
+        config.get("currency") if isinstance(config, dict) else "",
+        "EUR",
+    ).lower()
+
+
+def smx_plan_currency(plan):
+    return smx_clean_text(
+        plan.get("currency")
+        or plan.get("billingCurrency")
+        or smx_config_currency(),
+        "EUR",
+    ).lower()
+
+
+def smx_plan_monthly_major_amount(plan):
+    for key in [
+        "monthlyPrice",
+        "monthly_price",
+        "monthlyPriceEur",
+        "monthly_price_eur",
+        "priceMonthly",
+        "price_monthly",
+        "price",
+        "amount",
+    ]:
+        if key in plan and str(plan.get(key)).strip() not in {"", "None", "null"}:
+            return smx_decimal(plan.get(key), "0")
+
+    for key in [
+        "monthlyUnitAmount",
+        "monthly_unit_amount",
+        "unitAmount",
+        "unit_amount",
+        "amountMinor",
+        "amount_minor",
+    ]:
+        if key in plan and str(plan.get(key)).strip() not in {"", "None", "null"}:
+            return smx_decimal(plan.get(key), "0") / smx_decimal("100", "100")
+
+    return smx_decimal("0", "0")
+
+
+def smx_plan_monthly_minor_amount(plan_key):
+    from decimal import Decimal, ROUND_HALF_UP
+
+    plan = smx_get_plan(plan_key)
+
+    if not plan:
+        return None
+
+    major = smx_plan_monthly_major_amount(plan)
+
+    if major <= 0:
+        return None
+
+    return int((major * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def smx_plan_key_from_monthly_minor_amount(unit_amount, currency=""):
+    try:
+        unit_amount = int(unit_amount)
+    except Exception:
+        return ""
+
+    currency = smx_clean_text(currency or smx_config_currency(), "EUR").lower()
+
+    for plan in smx_plan_records():
+        key = smx_clean_text(plan.get("key") or plan.get("planKey") or plan.get("plan")).lower()
+
+        if not key or key == "free":
+            continue
+
+        plan_currency = smx_plan_currency(plan)
+
+        if plan_currency and currency and plan_currency != currency:
+            continue
+
+        amount = smx_plan_monthly_minor_amount(key)
+
+        if amount is not None and int(amount) == unit_amount:
+            return key
+
+    return ""
+
+
+def smx_walk_stripe_price_map_for_price_id(node, price_id, inherited_plan=""):
+    if isinstance(node, dict):
+        current_plan = smx_clean_text(
+            node.get("planKey") or node.get("plan_key") or node.get("plan") or inherited_plan
+        ).lower()
+
+        for key in ["priceId", "price_id", "livePriceId", "live_price_id", "testPriceId", "test_price_id"]:
+            if smx_clean_text(node.get(key)) == price_id and current_plan:
+                return current_plan
+
+        for key, value in node.items():
+            next_inherited = current_plan
+
+            if isinstance(key, str) and key.lower() in smx_known_plan_keys():
+                next_inherited = key.lower()
+
+            found = smx_walk_stripe_price_map_for_price_id(value, price_id, next_inherited)
+
+            if found:
+                return found
+
+    elif isinstance(node, list):
+        for value in node:
+            found = smx_walk_stripe_price_map_for_price_id(value, price_id, inherited_plan)
+
+            if found:
+                return found
+
+    return ""
+
+
+def smx_plan_key_from_stripe_price_id(price_id):
+    price_id = smx_clean_text(price_id)
+
+    if not price_id:
+        return ""
+
+    return smx_walk_stripe_price_map_for_price_id(smx_stripe_price_map(), price_id)
+
+
+def smx_obj_get(obj, *names):
+    for name in names:
+        if isinstance(obj, dict):
+            value = obj.get(name)
+        else:
+            value = getattr(obj, name, None)
+
+        if value is not None and str(value).strip():
+            return value
+
+    return None
+
+
+def smx_plan_key_from_stripe_price(price, subscription=None):
+    if not price:
+        return ""
+
+    price_id = smx_clean_text(smx_obj_get(price, "id"))
+
+    if price_id:
+        mapped = smx_plan_key_from_stripe_price_id(price_id)
+
+        if mapped:
+            return mapped
+
+    text_values = []
+
+    for source in [price, subscription]:
+        if not source:
+            continue
+
+        for name in ["lookup_key", "lookupKey", "nickname", "description", "name", "id"]:
+            value = smx_obj_get(source, name)
+
+            if value:
+                text_values.append(str(value).lower())
+
+    product = smx_obj_get(price, "product")
+
+    if product and not isinstance(product, str):
+        for name in ["name", "description", "id"]:
+            value = smx_obj_get(product, name)
+
+            if value:
+                text_values.append(str(value).lower())
+
+    blob = " ".join(text_values)
+
+    for plan in smx_plan_records():
+        key = smx_clean_text(plan.get("key") or plan.get("planKey") or plan.get("plan")).lower()
+
+        if key and key != "free" and key in blob:
+            return key
+
+    amount = smx_obj_get(price, "unit_amount", "unitAmount", "amount")
+    currency = smx_clean_text(smx_obj_get(price, "currency"), smx_config_currency())
+
+    by_amount = smx_plan_key_from_monthly_minor_amount(amount, currency)
+
+    if by_amount:
+        return by_amount
+
+    return ""
+
+
+def smx_plan_key_from_stripe_subscription(subscription):
+    metadata = smx_obj_get(subscription, "metadata") or {}
+
+    if isinstance(metadata, dict):
+        plan = smx_clean_text(metadata.get("planKey") or metadata.get("plan_key") or metadata.get("plan")).lower()
+
+        if plan:
+            return plan
+
+    items = smx_obj_get(subscription, "items")
+    data = smx_obj_get(items, "data") if items is not None else []
+
+    for item in list(data or []):
+        price = smx_obj_get(item, "price") or smx_obj_get(item, "plan")
+
+        plan = smx_plan_key_from_stripe_price(price, subscription)
+
+        if plan:
+            return plan
+
+    return ""
+
+
+def smx_pricing_source_summary():
+    return {
+        "pricingConfig": str(smx_pricing_config_path()),
+        "stripePriceMap": str(smx_stripe_price_map_path()),
+        "plans": [
+            {
+                "key": smx_clean_text(plan.get("key") or plan.get("planKey") or plan.get("plan")).lower(),
+                "monthlyMinorAmount": smx_plan_monthly_minor_amount(
+                    smx_clean_text(plan.get("key") or plan.get("planKey") or plan.get("plan")).lower()
+                ),
+                "currency": smx_plan_currency(plan),
+                "creditPeriod": plan.get("creditPeriod"),
+                "monthlyCredits": plan.get("monthlyCredits"),
+                "weeklyCredits": plan.get("weeklyCredits"),
+                "cloneSlots": plan.get("cloneSlots", plan.get("maxCustomVoices")),
+            }
+            for plan in smx_plan_records()
+        ],
+    }
+# <<< SMX_PRICING_SINGLE_SOURCE_OF_TRUTH <<<

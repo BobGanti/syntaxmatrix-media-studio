@@ -98,7 +98,13 @@ def main() -> None:
     assert "/api/billing/free-plan" in controller
 
     plans_js = (ROOT / "frontend/clone_voice/plans.js").read_text(encoding="utf-8")
-    assert "Continue with Free" in plans_js
+    # Stage 2: plan labels/buttons must come from the runtime plan catalogue/API,
+    # not from a hardcoded frontend fallback catalogue.
+    assert "const FALLBACK_PLANS = []" in plans_js or "FALLBACK_PLANS=[]" in plans_js.replace(" ", "")
+    assert "SMX_PLAN_CATALOGUE_REQUIRED" in plans_js
+
+    for forbidden in ["€9", "€29", "€99", "$9", "$29", "$99"]:
+        assert forbidden not in plans_js
     assert "/api/billing/free-plan" in plans_js
 
     print("PRICING + FREE PLAN ACCEPTANCE: PASSED")
@@ -110,3 +116,20 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# >>> SMX_STAGE2_FREE_PLAN_FRONTEND_SOURCE_TEST >>>
+def _smx_stage2_validate_frontend_plan_source() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    plans_js = (root / "frontend" / "clone_voice" / "plans.js").read_text(encoding="utf-8", errors="ignore")
+
+    compact = plans_js.replace(" ", "").replace("\n", "")
+
+    assert "constFALLBACK_PLANS=[]" in compact or "FALLBACK_PLANS=[]" in compact
+    assert "SMX_PLAN_CATALOGUE_REQUIRED" in plans_js
+
+    for forbidden in ["€9", "€29", "€99", "$9", "$29", "$99"]:
+        assert forbidden not in plans_js
+# <<< SMX_STAGE2_FREE_PLAN_FRONTEND_SOURCE_TEST >>>

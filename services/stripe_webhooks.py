@@ -60,6 +60,18 @@ def _metadata(obj: Any) -> dict[str, Any]:
         return {}
 
 
+
+
+# >>> SMX_STRIPE_WEBHOOK_CENTRAL_PLAN_RESOLVER >>>
+def _smx_resolve_stripe_object_plan_key(obj) -> str:
+    try:
+        from services.billing_pricing import smx_plan_key_from_stripe_subscription
+
+        return smx_plan_key_from_stripe_subscription(obj) or ""
+    except Exception:
+        return ""
+# <<< SMX_STRIPE_WEBHOOK_CENTRAL_PLAN_RESOLVER >>>
+
 def _ensure_billing_dir() -> None:
     BILLING_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -357,7 +369,7 @@ def _handle_checkout_session(session: Any, *, event_id: str, event_type: str) ->
         }
 
     workspace_id = metadata.get("workspaceId") or _get(session, "client_reference_id")
-    plan_key = metadata.get("planKey") or metadata.get("plan") or "starter"
+    plan_key = metadata.get("planKey") or metadata.get("plan") or _smx_resolve_stripe_object_plan_key(session)
 
     payment_status = _clean(_get(session, "payment_status"))
     session_status = _clean(_get(session, "status"))
@@ -392,7 +404,7 @@ def _handle_subscription(subscription: Any, *, event_id: str, event_type: str) -
     metadata = _metadata(subscription)
 
     workspace_id = metadata.get("workspaceId")
-    plan_key = metadata.get("planKey") or metadata.get("plan") or "starter"
+    plan_key = metadata.get("planKey") or metadata.get("plan") or _smx_resolve_stripe_object_plan_key(subscription)
     status = _clean(_get(subscription, "status"), "active")
 
     subscription_deleted = event_type == "customer.subscription.deleted"

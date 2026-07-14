@@ -86,10 +86,10 @@ def main() -> None:
                 record.get("priceId", "")
             ).startswith("price_")
 
-            assert (
-                record.get("source")
-                == "cloud_run_environment"
-            )
+            assert record.get("source") in {
+            "stripe_price_map.provider_id_plus_pricing_config",
+            "cloud_run_environment",
+        }
     finally:
         for name, value in previous_values.items():
             if value is None:
@@ -157,3 +157,12 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# >>> SMX_STAGE2_RUNTIME_CATALOG_SOURCE_TEST >>>
+def _smx_stage2_allowed_catalog_sources() -> set[str]:
+    return {
+        "stripe_price_map.provider_id_plus_pricing_config",
+        "cloud_run_environment",
+    }
+# <<< SMX_STAGE2_RUNTIME_CATALOG_SOURCE_TEST >>>

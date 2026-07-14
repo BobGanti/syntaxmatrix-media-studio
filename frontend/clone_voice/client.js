@@ -1273,3 +1273,205 @@
   // <<< SMX_FREE_PLAN_SYSTEM_ONLY_UI <<<
 
 })();
+
+// >>> SMX_CHECKOUT_RETURN_AUTO_RECONCILE >>>
+(function smxCheckoutReturnAutoReconcile() {
+  const KEY_PREFIX = "smx_checkout_return_reconciled:";
+
+  function params() {
+    return new URLSearchParams(window.location.search || "");
+  }
+
+  function currentWorkspaceId() {
+    const p = params();
+
+    return (
+      p.get("workspaceId") ||
+      p.get("workspace_id") ||
+      window.SMX_WORKSPACE_ID ||
+      localStorage.getItem("smx_workspace_id") ||
+      ""
+    );
+  }
+
+  function stripeReturnId() {
+    const p = params();
+
+    return (
+      p.get("session_id") ||
+      p.get("sessionId") ||
+      p.get("checkout_session_id") ||
+      p.get("checkoutSessionId") ||
+      p.get("stripeId") ||
+      ""
+    );
+  }
+
+  function isBillingSuccessReturn() {
+    const p = params();
+    const billing = String(p.get("billing") || "").toLowerCase();
+
+    return (
+      billing === "success" ||
+      billing === "checkout_success" ||
+      Boolean(stripeReturnId())
+    );
+  }
+
+  function showMessage(text, kind) {
+    const message = String(text || "").trim();
+
+    if (!message) {
+      return;
+    }
+
+    let box = document.querySelector("[data-smx-checkout-return-message='true']");
+
+    if (!box) {
+      box = document.createElement("div");
+      box.setAttribute("data-smx-checkout-return-message", "true");
+      box.style.cssText = [
+        "position:fixed",
+        "top:18px",
+        "left:50%",
+        "transform:translateX(-50%)",
+        "z-index:99999",
+        "max-width:min(720px,calc(100vw - 32px))",
+        "padding:14px 18px",
+        "border-radius:16px",
+        "font-weight:800",
+        "box-shadow:0 12px 40px rgba(0,0,0,.35)",
+        "background:#071525",
+        "color:#eaf7ff",
+        "border:1px solid rgba(139,213,255,.35)",
+      ].join(";");
+
+      document.body.appendChild(box);
+    }
+
+    if (kind === "success") {
+      box.style.background = "#07351f";
+      box.style.borderColor = "rgba(122,255,184,.45)";
+    } else if (kind === "error") {
+      box.style.background = "#3a1116";
+      box.style.borderColor = "rgba(255,145,160,.55)";
+    }
+
+    box.textContent = message;
+
+    window.clearTimeout(window.__smxCheckoutReturnMessageTimer);
+    window.__smxCheckoutReturnMessageTimer = window.setTimeout(() => {
+      if (box && box.parentElement) {
+        box.remove();
+      }
+    }, 9000);
+  }
+
+  async function refreshEntitlement() {
+    const workspaceId = currentWorkspaceId();
+
+    if (!workspaceId) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/billing/entitlement?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+
+      if (res.ok) {
+        const entitlement = await res.json().catch(() => null);
+        window.SMX_BILLING_ENTITLEMENT = entitlement;
+
+        window.dispatchEvent(new CustomEvent("smx:billing-entitlement-updated", {
+          detail: entitlement,
+        }));
+      }
+    } catch (err) {
+      console.warn("[SMX] entitlement refresh after checkout failed", err);
+    }
+  }
+
+  async function reconcileCheckoutReturn() {
+    if (!isBillingSuccessReturn()) {
+      return;
+    }
+
+    const workspaceId = currentWorkspaceId();
+    const stripeId = stripeReturnId();
+
+    if (!workspaceId || !stripeId) {
+      showMessage("Payment completed, but the app could not read the workspace/session return data. Use Refresh or contact support.", "error");
+      return;
+    }
+
+    const dedupeKey = KEY_PREFIX + workspaceId + ":" + stripeId;
+
+    if (sessionStorage.getItem(dedupeKey) === "done") {
+      await refreshEntitlement();
+      return;
+    }
+
+    showMessage("Payment successful. Activating your plan…", "info");
+
+    try {
+      const res = await fetch("/api/billing/checkout/reconcile", {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          workspaceId,
+          stripeId,
+          sessionId: stripeId,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.message || data.error || "Checkout reconciliation failed");
+      }
+
+      sessionStorage.setItem(dedupeKey, "done");
+
+      await refreshEntitlement();
+
+      showMessage("Your paid plan is now active.", "success");
+
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete("billing");
+      cleanUrl.searchParams.delete("session_id");
+      cleanUrl.searchParams.delete("sessionId");
+      cleanUrl.searchParams.delete("checkout_session_id");
+      cleanUrl.searchParams.delete("checkoutSessionId");
+      cleanUrl.searchParams.delete("stripeId");
+      window.history.replaceState({}, "", cleanUrl.toString());
+
+      setTimeout(() => {
+        window.location.reload();
+      }, 1200);
+
+    } catch (err) {
+      console.error("[SMX] checkout return reconcile failed", err);
+      showMessage("Payment succeeded, but automatic plan activation failed. Admin reconcile can repair it, but this should not happen.", "error");
+    }
+  }
+
+  function schedule() {
+    reconcileCheckoutReturn();
+    setTimeout(reconcileCheckoutReturn, 700);
+    setTimeout(reconcileCheckoutReturn, 1800);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", schedule);
+  } else {
+    schedule();
+  }
+})();
+// <<< SMX_CHECKOUT_RETURN_AUTO_RECONCILE <<<
+

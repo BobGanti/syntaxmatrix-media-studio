@@ -8,48 +8,8 @@
     return ["free","starter","pro","business"].includes(planKey);
   }
 
-  const FALLBACK_PLANS = [
-    {
-      key: "free",
-      label: "Free",
-      price: "Free",
-      billing: "",
-      credits: "10 credits reset weekly",
-      voices: "System voices only",
-      description: "Try narration with system voices. Credits reset weekly.",
-      button: "Continue with Free"
-    },
-    {
-      key: "starter",
-      label: "Starter",
-      price: "€9.00",
-      billing: "/month",
-      credits: "1,000 monthly credits",
-      voices: "1 custom voice slot",
-      description: "Small team / early usage plan.",
-      button: "Choose Starter"
-    },
-    {
-      key: "pro",
-      label: "Pro",
-      price: "€29.00",
-      billing: "/month",
-      credits: "5,000 monthly credits",
-      voices: "3 custom voice slots",
-      description: "Regular narration and voice generation.",
-      button: "Choose Pro"
-    },
-    {
-      key: "business",
-      label: "Business",
-      price: "€99.00",
-      billing: "/month",
-      credits: "20,000 monthly credits",
-      voices: "10 custom voice slots",
-      description: "Higher usage with multiple workspaces and users.",
-      button: "Choose Business"
-    }
-  ];
+  const FALLBACK_PLANS = [];
+const SMX_PLAN_CATALOGUE_REQUIRED = true;
 
   function workspaceId() {
     const params = new URLSearchParams(window.location.search);
@@ -561,3 +521,214 @@
     }
   }, 400);
 })();
+
+// >>> SMX_PLAN_BUTTON_LABEL_FIX >>>
+(function smxPlanButtonLabelFix() {
+  const STYLE_ID = "smx-plan-button-label-fix-style";
+
+  function textOf(node) {
+    return (node && (node.innerText || node.textContent || "") || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function injectStyle() {
+    if (document.getElementById(STYLE_ID)) {
+      return;
+    }
+
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+      body.smx-plan-button-label-fixed button,
+      body.smx-plan-button-label-fixed a[role="button"] {
+        color: #06111d !important;
+        font-weight: 900 !important;
+        text-align: center !important;
+      }
+
+      [data-smx-plan-button-fixed="true"] {
+        min-height: 42px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding-left: 18px !important;
+        padding-right: 18px !important;
+        line-height: 1.15 !important;
+        white-space: nowrap !important;
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+
+  function detectPlanKey(card) {
+    const text = textOf(card).toLowerCase();
+
+    if (text.includes("business")) return "business";
+    if (text.includes("pro")) return "pro";
+    if (text.includes("starter")) return "starter";
+    if (text.includes("free")) return "free";
+
+    return "";
+  }
+
+  function labelForPlan(planKey) {
+    if (planKey === "free") return "Continue with Free";
+    if (planKey === "starter") return "Choose Starter";
+    if (planKey === "pro") return "Choose Pro";
+    if (planKey === "business") return "Choose Business";
+
+    return "Choose plan";
+  }
+
+  function findPlanCards() {
+    const cards = [];
+
+    Array.from(document.querySelectorAll("section, article, div"))
+      .forEach((node) => {
+        const text = textOf(node).toLowerCase();
+
+        if (
+          node.querySelector("button, a") &&
+          (
+            text.includes("monthly credits") ||
+            text.includes("system voices only") ||
+            text.includes("custom voice slot")
+          ) &&
+          (
+            text.includes("free") ||
+            text.includes("starter") ||
+            text.includes("pro") ||
+            text.includes("business")
+          )
+        ) {
+          cards.push(node);
+        }
+      });
+
+    return cards
+      .sort((a, b) => textOf(a).length - textOf(b).length)
+      .filter((card, index, arr) => {
+        return !arr.some((other, otherIndex) => {
+          return otherIndex < index && other.contains(card);
+        });
+      });
+  }
+
+  function fixButtons() {
+    document.body.classList.add("smx-plan-button-label-fixed");
+    injectStyle();
+
+    const cards = findPlanCards();
+
+    cards.forEach((card) => {
+      const planKey = detectPlanKey(card);
+      const label = labelForPlan(planKey);
+
+      const candidates = Array.from(card.querySelectorAll("button, a"))
+        .filter((node) => {
+          const visibleWidth = node.getBoundingClientRect().width;
+          const visibleHeight = node.getBoundingClientRect().height;
+          return visibleWidth > 40 && visibleHeight > 18;
+        });
+
+      const button = candidates[candidates.length - 1];
+
+      if (!button) {
+        return;
+      }
+
+      const current = textOf(button);
+
+      if (!current || current.length < 3 || current === "—") {
+        button.textContent = label;
+      }
+
+      button.setAttribute("data-smx-plan-button-fixed", "true");
+      button.setAttribute("aria-label", label);
+      button.title = label;
+    });
+  }
+
+  function schedule() {
+    fixButtons();
+    setTimeout(fixButtons, 250);
+    setTimeout(fixButtons, 800);
+    setTimeout(fixButtons, 1600);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", schedule);
+  } else {
+    schedule();
+  }
+
+  const observer = new MutationObserver(() => {
+    window.clearTimeout(window.__smxPlanButtonLabelFixTimer);
+    window.__smxPlanButtonLabelFixTimer = window.setTimeout(fixButtons, 120);
+  });
+
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+})();
+// <<< SMX_PLAN_BUTTON_LABEL_FIX <<<
+
+// >>> SMX_PLANS_CHECKOUT_RETURN_AUTO_RECONCILE >>>
+(function smxPlansCheckoutReturnAutoReconcile() {
+  function params() {
+    return new URLSearchParams(window.location.search || "");
+  }
+
+  function workspaceId() {
+    const p = params();
+    return p.get("workspaceId") || p.get("workspace_id") || localStorage.getItem("smx_workspace_id") || "";
+  }
+
+  function stripeId() {
+    const p = params();
+    return p.get("session_id") || p.get("sessionId") || p.get("checkout_session_id") || p.get("checkoutSessionId") || p.get("stripeId") || "";
+  }
+
+  async function run() {
+    const p = params();
+    const billing = String(p.get("billing") || "").toLowerCase();
+    const sid = stripeId();
+    const wid = workspaceId();
+
+    if (!(billing === "success" || sid) || !sid || !wid) {
+      return;
+    }
+
+    try {
+      await fetch("/api/billing/checkout/reconcile", {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({workspaceId: wid, stripeId: sid, sessionId: sid}),
+      });
+
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete("billing");
+      cleanUrl.searchParams.delete("session_id");
+      cleanUrl.searchParams.delete("sessionId");
+      cleanUrl.searchParams.delete("checkout_session_id");
+      cleanUrl.searchParams.delete("checkoutSessionId");
+      cleanUrl.searchParams.delete("stripeId");
+      window.history.replaceState({}, "", cleanUrl.toString());
+    } catch (err) {
+      console.warn("[SMX] plans checkout return reconcile failed", err);
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", run);
+  } else {
+    run();
+  }
+})();
+// <<< SMX_PLANS_CHECKOUT_RETURN_AUTO_RECONCILE <<<
+

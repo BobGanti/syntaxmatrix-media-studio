@@ -300,781 +300,377 @@
   loadSystemVoices();
 })();
 
-// >>> SMX_ADMIN_CLIENT_LIFECYCLE_UI >>>
-(() => {
-  "use strict";
-
-  // >>> SMX_ADMIN_CLEANUP_AUTH_HOTFIX >>>
-  let smxFirebaseConfigPromise = null;
-
-  async function loadFirebaseConfig() {
-    if (window.SMX_FIREBASE_CONFIG && window.SMX_FIREBASE_CONFIG.apiKey) {
-      return window.SMX_FIREBASE_CONFIG;
-    }
-
-    if (window.__FIREBASE_CONFIG__ && window.__FIREBASE_CONFIG__.apiKey) {
-      return window.__FIREBASE_CONFIG__;
-    }
-
-    if (!smxFirebaseConfigPromise) {
-      smxFirebaseConfigPromise = fetch("/api/auth/firebase-config", {
-        credentials: "same-origin",
-        cache: "no-store",
-        headers: { "Accept": "application/json" }
-      })
-        .then((response) => response.json())
-        .then((payload) => {
-          const config = payload.firebaseConfig || payload.config || payload;
-
-          if (!config || !config.apiKey) {
-            throw new Error("Firebase config is missing apiKey.");
-          }
-
-          window.SMX_FIREBASE_CONFIG = config;
-          return config;
-        });
-    }
-
-    return smxFirebaseConfigPromise;
-  }
-
-  async function ensureFirebaseAuth(timeoutMs = 5000) {
-    const started = Date.now();
-
-    while (Date.now() - started < timeoutMs) {
-      const fb = window.firebase || null;
-
-      if (!fb || typeof fb.auth !== "function") {
-        await new Promise((resolve) => setTimeout(resolve, 150));
-        continue;
-      }
-
-      try {
-        if (Array.isArray(fb.apps) && fb.apps.length === 0 && typeof fb.initializeApp === "function") {
-          const config = await loadFirebaseConfig();
-          fb.initializeApp(config);
-        }
-
-        return fb.auth();
-      } catch (error) {
-        const message = String(error && error.message ? error.message : error);
-
-        if (
-          message.includes("no-app") ||
-          message.includes("No Firebase App") ||
-          message.includes("DEFAULT")
-        ) {
-          try {
-            const config = await loadFirebaseConfig();
-
-            if (typeof fb.initializeApp === "function") {
-              fb.initializeApp(config);
-              return fb.auth();
-            }
-          } catch (_) {
-            // Keep waiting briefly. The page may still be loading Firebase.
-          }
-        } else {
-          console.warn("[SyntaxMatrix admin] Firebase auth not ready:", error);
-        }
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 150));
-    }
-
-    return null;
-  }
-
-  async function waitForFirebaseUser(timeoutMs = 5000) {
-    const auth = await ensureFirebaseAuth(timeoutMs);
-
-    if (!auth) {
-      return null;
-    }
-
-    if (auth.currentUser && typeof auth.currentUser.getIdToken === "function") {
-      return auth.currentUser;
-    }
-
-    return await new Promise((resolve) => {
-      let done = false;
-
-      const finish = (user) => {
-        if (done) return;
-        done = true;
-
-        try {
-          if (typeof unsubscribe === "function") unsubscribe();
-        } catch (_) {
-          // ignore
-        }
-
-        resolve(user || null);
-      };
-
-      let unsubscribe = null;
-
-      try {
-        unsubscribe = auth.onAuthStateChanged(
-          (user) => finish(user),
-          () => finish(null)
-        );
-      } catch (_) {
-        finish(null);
-      }
-
-      setTimeout(() => finish(auth.currentUser || null), timeoutMs);
-    });
-  }
-
-  async function ensureServerAdminSession() {
-    const user = await waitForFirebaseUser();
-
-    if (!user || typeof user.getIdToken !== "function") {
-      return { ok: false, reason: "firebase_user_not_ready" };
-    }
-
-    const idToken = await user.getIdToken(true);
-
-    if (!idToken) {
-      return { ok: false, reason: "missing_id_token" };
-    }
-
-    const response = await fetch("/api/auth/session", {
-      method: "POST",
-      credentials: "same-origin",
-      cache: "no-store",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": `Bearer ${idToken}`
-      },
-      body: JSON.stringify({
-        idToken,
-        token: idToken,
-        source: "admin_client_cleanup"
-      })
-    });
-
-    const payload = await response.json().catch(() => ({}));
-
-    if (!response.ok || payload.ok === false) {
-      return {
-        ok: false,
-        reason: payload.error || payload.message || `${response.status} ${response.statusText}`
-      };
-    }
-
-    return { ok: true, idToken };
-  }
-
-  async function authHeaders() {
-    try {
-      const user = await waitForFirebaseUser(1200);
-
-      if (!user || typeof user.getIdToken !== "function") {
-        return {};
-      }
-
-      const idToken = await user.getIdToken(false);
-
-      return idToken ? { "Authorization": `Bearer ${idToken}` } : {};
-    } catch (_) {
-      return {};
-    }
-  }
-  // <<< SMX_ADMIN_CLEANUP_AUTH_HOTFIX >>>
-
-  function esc(value) {
-    return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;"
-    }[ch]));
-  }
-
-  function mountRoot() {
-    let root = document.querySelector("#smxAdminClientLifecycle");
-
-    if (root) return root;
-
-    root = document.createElement("section");
-    root.id = "smxAdminClientLifecycle";
-    root.style.cssText = [
-      "margin:24px auto",
-      "max-width:1180px",
-      "padding:18px",
-      "border:1px solid rgba(126,163,255,.35)",
-      "border-radius:18px",
-      "background:rgba(10,24,38,.72)",
-      "color:#eaf4ff"
-    ].join(";");
-
-    const main = document.querySelector("main") || document.body;
-    main.prepend(root);
-
-    return root;
-  }
-
-  async function getJson(url, options = {}) {
-    const isAdminApi = String(url || "").includes("/api/admin/");
-    const existingHeaders = options.headers || {};
-
-    if (isAdminApi) {
-      const session = await ensureServerAdminSession();
-
-      if (!session.ok) {
-        throw new Error(`Authentication required. Backend session was not created: ${session.reason}`);
-      }
-    }
-
-    async function fetchOnce() {
-      const bearerHeaders = await authHeaders();
-
-      return fetch(url, {
-        credentials: "same-origin",
-        cache: "no-store",
-        ...options,
-        headers: {
-          "Accept": "application/json",
-          ...bearerHeaders,
-          ...existingHeaders
-        }
-      });
-    }
-
-    let response = await fetchOnce();
-    let payload = await response.json().catch(() => ({}));
-
-    if (isAdminApi && (response.status === 401 || response.status === 403)) {
-      const session = await ensureServerAdminSession();
-
-      if (session.ok) {
-        response = await fetchOnce();
-        payload = await response.json().catch(() => ({}));
-      }
-    }
-
-    if (!response.ok || payload.ok === false) {
-      throw new Error(payload.error || payload.message || `${response.status} ${response.statusText}`);
-    }
-
-    return payload;
-  }
-
-  async function postJson(url, body) {
-    return getJson(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-      },
-      body: JSON.stringify(body || {})
-    });
-  }
-
-  function rowHtml(client) {
-    const duplicate = client.duplicateEmail
-      ? `<span style="color:#ffdc7a;font-weight:900;">Duplicate email</span>`
-      : "";
-
-    const stripeBlock = client.activeStripeSubscription
-      ? `<span style="color:#ff9aa8;font-weight:900;">Cancel subscription first</span>`
-      : "";
-
-    const archiveButton = client.activeStripeSubscription
-      ? `<button type="button" disabled style="opacity:.55;cursor:not-allowed;">Delete</button>`
-      : `<button type="button" data-archive-workspace="${esc(client.workspaceId)}">Delete</button>`;
-
-    return `
-      <tr>
-        <td>
-          <strong>${esc(client.workspaceLabel || client.workspaceId)}</strong><br>
-          <small>${esc(client.workspaceId)}</small>
-        </td>
-        <td>
-          ${esc(client.billingEmail || "—")}<br>
-          ${duplicate}
-        </td>
-        <td>${esc(client.planKey || "free")}</td>
-        <td>${esc(client.subscriptionStatus || "active")}</td>
-        <td>${esc(client.provider || "internal")}</td>
-        <td>${client.memberCount ?? 0}</td>
-        <td>${stripeBlock || "—"}</td>
-        <td style="white-space:nowrap;">
-          ${archiveButton}
-          <button type="button" data-sync-workspace="${esc(client.workspaceId)}">Sync billing</button>
-        </td>
-      </tr>
-    `;
-  }
-
-  async function render() {
-    const root = mountRoot();
-
-    root.innerHTML = `
-      <div style="display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:14px;">
-        <div>
-          <h2 style="margin:0 0 6px;">Admin Client Cleanup</h2>
-          <p style="margin:0;color:#bcd3ee;">Archive old duplicate clients and sync billing after Stripe checkout.</p>
-        </div>
-        <button type="button" id="smxRefreshClientLifecycle">Refresh</button>
-      </div>
-      <div id="smxClientLifecycleBody">Loading clients...</div>
-    `;
-
-    const body = root.querySelector("#smxClientLifecycleBody");
-
-    try {
-      const payload = await getJson(`/api/admin/client-lifecycle?t=${Date.now()}`);
-      const clients = payload.clients || [];
-
-      body.innerHTML = `
-        <table style="width:100%;border-collapse:collapse;">
-          <thead>
-            <tr style="text-align:left;color:#aee9ff;">
-              <th>Workspace</th>
-              <th>Email</th>
-              <th>Plan</th>
-              <th>Subscription</th>
-              <th>Provider</th>
-              <th>Members</th>
-              <th>Blocker</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${clients.length ? clients.map(rowHtml).join("") : `<tr><td colspan="8">No active clients found.</td></tr>`}
-          </tbody>
-        </table>
-        <div style="margin-top:16px;padding-top:16px;border-top:1px solid rgba(126,163,255,.25);">
-          <strong>Manual Stripe reconcile</strong>
-          <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px;margin-top:10px;">
-            <input id="smxReconcileWorkspaceId" placeholder="workspaceId">
-            <input id="smxReconcileSessionId" placeholder="Stripe checkout session id, cs_...">
-            <button type="button" id="smxReconcileSessionBtn">Reconcile session</button>
-          </div>
-        </div>
-      `;
-
-      root.querySelectorAll("[data-archive-workspace]").forEach((button) => {
-        button.addEventListener("click", async () => {
-          const workspaceId = button.getAttribute("data-archive-workspace");
-
-          if (!window.confirm(`Delete/archive client workspace ${workspaceId}? This hides it from active admin lists. Active Stripe subscriptions are blocked.`)) {
-            return;
-          }
-
-          button.disabled = true;
-          button.textContent = "Deleting...";
-
-          try {
-            await postJson(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/archive`, {
-              reason: "admin_duplicate_cleanup"
-            });
-            await render();
-          } catch (error) {
-            alert(error.message);
-            button.disabled = false;
-            button.textContent = "Delete";
-          }
-        });
-      });
-
-      root.querySelectorAll("[data-sync-workspace]").forEach((button) => {
-        button.addEventListener("click", async () => {
-          const workspaceId = button.getAttribute("data-sync-workspace");
-
-          button.disabled = true;
-          button.textContent = "Syncing...";
-
-          try {
-            await postJson("/api/admin/billing/sync", { workspaceId });
-            await render();
-          } catch (error) {
-            alert(error.message);
-            button.disabled = false;
-            button.textContent = "Sync billing";
-          }
-        });
-      });
-
-      const reconcileBtn = root.querySelector("#smxReconcileSessionBtn");
-
-      if (reconcileBtn) {
-        reconcileBtn.addEventListener("click", async () => {
-          const workspaceId = root.querySelector("#smxReconcileWorkspaceId").value.trim();
-          const sessionId = root.querySelector("#smxReconcileSessionId").value.trim();
-
-          if (!workspaceId || !sessionId) {
-            alert("workspaceId and checkout session id are required.");
-            return;
-          }
-
-          reconcileBtn.disabled = true;
-          reconcileBtn.textContent = "Reconciling...";
-
-          try {
-            await postJson("/api/admin/billing/sync", { workspaceId, stripeId: sessionId });
-            await render();
-          } catch (error) {
-            alert(error.message);
-            reconcileBtn.disabled = false;
-            reconcileBtn.textContent = "Reconcile session";
-          }
-        });
-      }
-    } catch (error) {
-      body.innerHTML = `<p style="color:#ff9aa8;">${esc(error.message)}</p>`;
-    }
-
-    const refresh = root.querySelector("#smxRefreshClientLifecycle");
-
-    if (refresh) {
-      refresh.addEventListener("click", render);
-    }
-  }
-
-  document.addEventListener("DOMContentLoaded", () => {
-    setTimeout(render, 900);
-  });
-})();
-// <<< SMX_ADMIN_CLIENT_LIFECYCLE_UI <<<
-// >>> SMX_ADMIN_CLIENT_CLEANUP_SCALABLE_UI >>>
-(() => {
-  "use strict";
-
-  const STYLE_ID = "smxAdminClientCleanupScalableStyle";
+// >>> SMX_ADMIN_CLEANUP_STANDALONE_V1 >>>
+(function smxAdminCleanupStandaloneV1() {
+  const ROOT_ID = "smxAdminClientCleanupStandalone";
+  const STYLE_ID = "smx-admin-cleanup-standalone-style-v1";
 
   const state = {
     clients: [],
-    duplicates: {},
     query: "",
     filter: "all",
-    page: 1,
     pageSize: 25,
+    page: 1,
     loading: false,
-    searchRenderTimer: null,
+    error: "",
+    searchTimer: null,
   };
 
   function esc(value) {
-    return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;"
-    }[ch]));
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function lower(value) {
+    return String(value ?? "").toLowerCase().trim();
+  }
+
+  function truthy(value) {
+    return value === true || String(value ?? "").toLowerCase() === "true";
+  }
+
+  async function authHeaders(json) {
+    const headers = json ? {"Content-Type": "application/json"} : {};
+
+    try {
+      const compatUser =
+        window.firebase &&
+        window.firebase.auth &&
+        window.firebase.auth().currentUser;
+
+      if (compatUser && compatUser.getIdToken) {
+        headers.Authorization = `Bearer ${await compatUser.getIdToken()}`;
+      }
+    } catch (_) {
+      // Backend cookie session is still used via credentials: include.
+    }
+
+    return headers;
+  }
+
+  async function apiJson(url, options = {}) {
+    const method = options.method || "GET";
+    const hasBody = Object.prototype.hasOwnProperty.call(options, "body");
+
+    const res = await fetch(url, {
+      method,
+      credentials: "include",
+      cache: "no-store",
+      headers: await authHeaders(hasBody),
+      body: hasBody ? JSON.stringify(options.body || {}) : undefined,
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.message || data.error || `Request failed: ${res.status}`);
+    }
+
+    return data;
   }
 
   function injectStyle() {
-    if (document.getElementById(STYLE_ID)) return;
+    const old = document.getElementById(STYLE_ID);
+    if (old) old.remove();
 
     const style = document.createElement("style");
     style.id = STYLE_ID;
     style.textContent = `
-      #smxAdminClientLifecycle {
-        width: min(1220px, calc(100vw - 44px)) !important;
-        max-width: 1220px !important;
-        margin: 32px auto 42px !important;
-        padding: 0 !important;
-        border: 1px solid rgba(139, 188, 255, .28) !important;
-        border-radius: 22px !important;
-        background: linear-gradient(135deg, rgba(8, 22, 36, .98), rgba(7, 16, 29, .96)) !important;
-        color: #effaff !important;
-        box-shadow: 0 24px 70px rgba(0, 0, 0, .24) !important;
-        overflow: hidden !important;
+      #${ROOT_ID},
+      #${ROOT_ID} *,
+      #${ROOT_ID} *::before,
+      #${ROOT_ID} *::after {
+        box-sizing: border-box;
       }
 
-      .smx-admin-scale-shell {
-        padding: 22px;
+      #${ROOT_ID} {
+        width: min(1360px, calc(100vw - 48px));
+        max-width: calc(100vw - 48px);
+        margin: 28px auto 36px;
+        color: #f4fbff;
+        font-family: inherit;
       }
 
-      .smx-admin-scale-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
+      #${ROOT_ID} .smx-cleanup-shell {
+        width: 100%;
+        overflow: hidden;
+        border: 1px solid rgba(139, 213, 255, 0.2);
+        border-radius: 26px;
+        background: rgba(4, 15, 28, 0.82);
+        padding: 28px;
+      }
+
+      #${ROOT_ID} .smx-cleanup-head {
+        display: grid;
+        grid-template-columns: minmax(280px, 1fr) max-content;
         gap: 18px;
+        align-items: start;
+        margin-bottom: 18px;
+      }
+
+      #${ROOT_ID} .smx-kicker {
+        margin: 0 0 8px;
+        color: #8df7ee;
+        font-weight: 900;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        font-size: 14px;
+      }
+
+      #${ROOT_ID} h1 {
+        margin: 0 0 10px;
+        line-height: 0.96;
+        font-size: clamp(38px, 4vw, 62px);
+      }
+
+      #${ROOT_ID} .smx-subtitle {
+        margin: 0;
+        max-width: 760px;
+        color: #c9dcf2;
+        font-size: 18px;
+        line-height: 1.45;
+      }
+
+      #${ROOT_ID} .smx-btn {
+        border: 0;
+        border-radius: 999px;
+        min-height: 44px;
+        padding: 12px 20px;
+        background: linear-gradient(135deg, #9df2e8, #8bb9ff);
+        color: #06111d;
+        font-weight: 900;
+        font-size: 16px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      #${ROOT_ID} .smx-btn.secondary {
+        background: rgba(255,255,255,.055);
+        color: #d9eaff;
+        border: 1px solid rgba(139,213,255,.16);
+      }
+
+      #${ROOT_ID} .smx-btn.danger {
+        background: linear-gradient(135deg, #ffadbd, #ff7b85);
+        color: #111827;
+      }
+
+      #${ROOT_ID} .smx-btn.blocked {
+        background: rgba(255, 150, 170, 0.42);
+        color: #111827;
+        cursor: not-allowed;
+      }
+
+      #${ROOT_ID} .smx-btn:disabled {
+        opacity: .6;
+        cursor: not-allowed;
+      }
+
+      #${ROOT_ID} .smx-stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin: 18px 0;
+      }
+
+      #${ROOT_ID} .smx-stat {
+        min-width: 0;
+        border: 1px solid rgba(139,213,255,.18);
+        border-radius: 18px;
+        background: rgba(255,255,255,.035);
+        padding: 16px;
+      }
+
+      #${ROOT_ID} .smx-stat-label {
+        color: #b6cdeb;
+        font-size: 13px;
+        font-weight: 900;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+      }
+
+      #${ROOT_ID} .smx-stat-value {
+        margin-top: 8px;
+        font-size: 30px;
+        font-weight: 900;
+      }
+
+      #${ROOT_ID} .smx-toolbar {
+        display: grid;
+        grid-template-columns: minmax(280px, 1fr) 210px 180px 140px;
+        gap: 12px;
+        align-items: center;
         margin-bottom: 16px;
       }
 
-      .smx-admin-scale-kicker {
-        margin: 0 0 6px;
-        color: #9ff7eb;
-        letter-spacing: .12em;
-        text-transform: uppercase;
-        font-size: 12px;
-        font-weight: 950;
-      }
-
-      .smx-admin-scale-title {
-        margin: 0;
-        font-size: clamp(26px, 3vw, 38px);
-        line-height: 1.04;
-        font-weight: 950;
-      }
-
-      .smx-admin-scale-subtitle {
-        margin: 8px 0 0;
-        color: #bad4f0;
-        line-height: 1.45;
-        max-width: 760px;
-      }
-
-      .smx-admin-scale-btn {
-        border: 0;
-        border-radius: 999px;
-        min-height: 38px;
-        padding: 9px 14px;
-        font-weight: 950;
-        cursor: pointer;
-        color: #061523;
-        background: linear-gradient(135deg, #a3f3ee, #85b7ff);
-        white-space: nowrap;
-      }
-
-      .smx-admin-scale-btn:hover {
-        transform: translateY(-1px);
-      }
-
-      .smx-admin-scale-btn:disabled {
-        opacity: .45;
-        cursor: not-allowed;
-        transform: none;
-      }
-
-      .smx-admin-scale-danger {
-        background: linear-gradient(135deg, #ffd0d7, #ff8fa3);
-      }
-
-      .smx-admin-scale-ghost {
-        background: rgba(255,255,255,.07);
-        color: #dff6ff;
-        border: 1px solid rgba(155,205,255,.23);
-      }
-
-      .smx-admin-scale-stats {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 10px;
-        margin: 14px 0 16px;
-      }
-
-      .smx-admin-scale-stat {
-        border: 1px solid rgba(151, 201, 255, .21);
-        border-radius: 16px;
-        padding: 12px 13px;
-        background: rgba(255,255,255,.045);
-      }
-
-      .smx-admin-scale-stat-label {
-        color: #9fb7d4;
-        font-size: 11px;
-        font-weight: 900;
-        text-transform: uppercase;
-        letter-spacing: .06em;
-      }
-
-      .smx-admin-scale-stat-value {
-        margin-top: 5px;
-        font-size: 22px;
-        font-weight: 950;
-      }
-
-      .smx-admin-scale-toolbar {
-        display: grid;
-        grid-template-columns: minmax(240px, 1.3fr) 160px 140px auto;
-        gap: 10px;
-        align-items: center;
-        margin: 16px 0;
-      }
-
-      .smx-admin-scale-input,
-      .smx-admin-scale-select {
-        min-height: 42px;
-        border-radius: 13px;
-        border: 1px solid rgba(143, 196, 255, .24);
-        background: rgba(2, 10, 19, .82);
-        color: #effaff;
-        padding: 0 13px;
-        outline: none;
-        font-weight: 750;
-      }
-
-      .smx-admin-scale-input::placeholder {
-        color: #829ab5;
-      }
-
-      .smx-admin-table-wrap {
-        border: 1px solid rgba(145,198,255,.20);
-        border-radius: 17px;
-        overflow: auto;
-        max-height: min(620px, 62vh);
-        background: rgba(2,10,19,.45);
-      }
-
-      .smx-admin-client-table {
+      #${ROOT_ID} input,
+      #${ROOT_ID} select {
         width: 100%;
-        min-width: 980px;
+        min-width: 0;
+        min-height: 44px;
+        border-radius: 16px;
+        border: 1px solid rgba(139,213,255,.18);
+        background: rgba(2, 10, 19, .92);
+        color: #f4fbff;
+        padding: 0 14px;
+        font: inherit;
+        font-weight: 800;
+      }
+
+      #${ROOT_ID} input::placeholder {
+        color: #93a9c4;
+      }
+
+      #${ROOT_ID} .smx-table-wrap {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: auto;
+        overflow-y: visible;
+        border: 1px solid rgba(139,213,255,.14);
+        border-radius: 18px;
+      }
+
+      #${ROOT_ID} table {
+        width: 100%;
+        min-width: 1080px;
         border-collapse: collapse;
       }
 
-      .smx-admin-client-table thead th {
-        position: sticky;
-        top: 0;
-        z-index: 2;
-        background: rgba(7, 18, 31, .98);
-        color: #aee9ff;
+      #${ROOT_ID} th,
+      #${ROOT_ID} td {
+        padding: 14px;
         text-align: left;
-        font-size: 11px;
-        letter-spacing: .06em;
-        text-transform: uppercase;
-        padding: 12px 12px;
-        border-bottom: 1px solid rgba(145,198,255,.22);
         white-space: nowrap;
-      }
-
-      .smx-admin-client-table tbody td {
-        padding: 12px;
-        border-bottom: 1px solid rgba(145,198,255,.11);
+        border-bottom: 1px solid rgba(139,213,255,.12);
         vertical-align: middle;
+      }
+
+      #${ROOT_ID} th {
+        color: #9beeff;
         font-size: 13px;
+        letter-spacing: .05em;
+        text-transform: uppercase;
       }
 
-      .smx-admin-client-table tbody tr:hover {
-        background: rgba(126, 190, 255, .06);
+      #${ROOT_ID} tr:last-child td {
+        border-bottom: 0;
       }
 
-      .smx-admin-main-cell strong {
-        display: block;
-        font-size: 14px;
-        color: #f5fbff;
-        margin-bottom: 3px;
+      #${ROOT_ID} td:last-child,
+      #${ROOT_ID} th:last-child {
+        position: sticky;
+        right: 0;
+        background: #06111d;
+        box-shadow: -10px 0 18px rgba(0,0,0,.28);
+        z-index: 2;
       }
 
-      .smx-admin-muted {
-        color: #93aeca;
-        font-size: 12px;
-        word-break: break-all;
+      #${ROOT_ID} th:last-child {
+        z-index: 3;
       }
 
-      .smx-admin-email {
-        font-weight: 850;
-        color: #effaff;
-      }
-
-      .smx-admin-badge {
+      #${ROOT_ID} .smx-badge {
         display: inline-flex;
         align-items: center;
         border-radius: 999px;
-        padding: 5px 8px;
-        font-size: 11px;
-        line-height: 1;
-        font-weight: 950;
-        color: #061523;
-        background: #b8f6ff;
-        white-space: nowrap;
+        padding: 6px 12px;
+        font-weight: 900;
+        font-size: 13px;
+        color: #06111d;
+        background: #a9f5bf;
       }
 
-      .smx-admin-badge-plan {
-        background: #b9f4ce;
+      #${ROOT_ID} .smx-badge.info {
+        background: #a8efff;
       }
 
-      .smx-admin-badge-warning {
-        background: #ffdc7a;
+      #${ROOT_ID} .smx-small {
+        color: #8fb0d3;
+        font-size: 13px;
       }
 
-      .smx-admin-badge-danger {
-        background: #ff9aa8;
-      }
-
-      .smx-admin-row-actions {
+      #${ROOT_ID} .smx-actions {
         display: flex;
-        align-items: center;
         gap: 8px;
+        align-items: center;
         justify-content: flex-end;
       }
 
-      .smx-admin-row-actions .smx-admin-scale-btn {
-        min-height: 34px;
-        padding: 7px 11px;
-        font-size: 12px;
-      }
-
-      .smx-admin-scale-footer {
+      #${ROOT_ID} .smx-pagination {
         display: flex;
-        align-items: center;
         justify-content: space-between;
+        align-items: center;
         gap: 12px;
-        margin-top: 14px;
-        color: #b7cbe3;
-        font-size: 13px;
+        flex-wrap: wrap;
+        margin: 14px 0 0;
+        color: #bcd3ee;
       }
 
-      .smx-admin-page-controls {
+      #${ROOT_ID} .smx-page-buttons {
         display: flex;
         align-items: center;
-        gap: 8px;
-      }
-
-      .smx-admin-manual-sync {
-        margin-top: 18px;
-        border-top: 1px solid rgba(145,198,255,.18);
-        padding-top: 16px;
-      }
-
-      .smx-admin-manual-sync h3 {
-        margin: 0 0 5px;
-        font-size: 17px;
-      }
-
-      .smx-admin-manual-sync p {
-        margin: 0 0 12px;
-        color: #b7cbe3;
-        font-size: 13px;
-      }
-
-      .smx-admin-sync-form {
-        display: grid;
-        grid-template-columns: minmax(180px, .8fr) minmax(260px, 1.4fr) auto;
         gap: 10px;
       }
 
-      .smx-admin-empty,
-      .smx-admin-error {
-        border: 1px dashed rgba(157,207,255,.32);
+      #${ROOT_ID} .smx-manual {
+        margin-top: 24px;
+        padding-top: 22px;
+        border-top: 1px solid rgba(139,213,255,.14);
+      }
+
+      #${ROOT_ID} .smx-manual h2 {
+        margin: 0 0 8px;
+        font-size: 24px;
+      }
+
+      #${ROOT_ID} .smx-manual p {
+        margin: 0 0 14px;
+        color: #c9dcf2;
+        line-height: 1.45;
+      }
+
+      #${ROOT_ID} .smx-manual-form {
+        display: grid;
+        grid-template-columns: minmax(220px, .8fr) minmax(320px, 1.2fr) 150px;
+        gap: 12px;
+        align-items: center;
+      }
+
+      #${ROOT_ID} .smx-message {
+        padding: 18px;
+        border: 1px solid rgba(139,213,255,.16);
         border-radius: 16px;
-        padding: 22px;
-        color: #c6d9ef;
-        text-align: center;
+        color: #c9dcf2;
       }
 
-      .smx-admin-error {
-        border-style: solid;
-        border-color: rgba(255,154,168,.48);
-        background: rgba(255,82,112,.08);
-        color: #ffd4da;
-        text-align: left;
-        font-weight: 850;
+      #${ROOT_ID} .smx-message.error {
+        color: #ffb7c3;
+        border-color: rgba(255,140,160,.32);
       }
 
-      @media (max-width: 920px) {
-        .smx-admin-scale-head,
-        .smx-admin-scale-footer {
-          flex-direction: column;
-          align-items: stretch;
+      @media (max-width: 820px) {
+        #${ROOT_ID} {
+          width: calc(100vw - 24px);
+          max-width: calc(100vw - 24px);
+          margin: 18px auto 28px;
         }
 
-        .smx-admin-scale-stats,
-        .smx-admin-scale-toolbar,
-        .smx-admin-sync-form {
+        #${ROOT_ID} .smx-cleanup-shell {
+          padding: 18px;
+        }
+
+        #${ROOT_ID} .smx-cleanup-head,
+        #${ROOT_ID} .smx-stats,
+        #${ROOT_ID} .smx-toolbar,
+        #${ROOT_ID} .smx-manual-form {
           grid-template-columns: 1fr;
         }
 
-        .smx-admin-table-wrap {
-          max-height: 70vh;
+        #${ROOT_ID} .smx-btn {
+          width: 100%;
         }
       }
     `;
@@ -1082,220 +678,154 @@
     document.head.appendChild(style);
   }
 
-  async function authHeaders() {
-    try {
-      const fb = window.firebase || null;
-
-      if (!fb || typeof fb.auth !== "function") return {};
-
-      const auth = fb.auth();
-      const user = auth.currentUser;
-
-      if (!user || typeof user.getIdToken !== "function") return {};
-
-      const token = await user.getIdToken(false);
-
-      return token ? { "Authorization": `Bearer ${token}` } : {};
-    } catch (_) {
-      return {};
-    }
-  }
-
-  async function getJson(url, options = {}) {
-    const headers = {
-      "Accept": "application/json",
-      ...(await authHeaders()),
-      ...(options.headers || {})
-    };
-
-    const response = await fetch(url, {
-      credentials: "same-origin",
-      cache: "no-store",
-      ...options,
-      headers
-    });
-
-    const payload = await response.json().catch(() => ({}));
-
-    if (!response.ok || payload.ok === false) {
-      throw new Error(payload.error || payload.message || `${response.status} ${response.statusText}`);
-    }
-
-    return payload;
-  }
-
-  async function postJson(url, body) {
-    return getJson(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(body || {})
-    });
-  }
-
-  function mountRoot() {
-    let root = document.querySelector("#smxAdminClientLifecycle");
+  function ensureRoot() {
+    let root = document.getElementById(ROOT_ID);
 
     if (!root) {
       root = document.createElement("section");
-      root.id = "smxAdminClientLifecycle";
-      const main = document.querySelector("main") || document.body;
-      main.prepend(root);
+      root.id = ROOT_ID;
+
+      const target =
+        document.querySelector("main") ||
+        document.querySelector(".admin-page") ||
+        document.body;
+
+      if (target === document.body) {
+        document.body.insertBefore(root, document.body.firstChild);
+      } else {
+        target.insertBefore(root, target.firstChild);
+      }
     }
 
     return root;
   }
 
-  function normalise(value) {
-    return String(value || "").toLowerCase().trim();
-  }
-
-  function isPaid(client) {
-    return normalise(client.planKey) !== "free";
-  }
-
-  function filteredClients() {
-    const q = normalise(state.query);
-
-    let rows = state.clients.slice();
-
-    if (state.filter === "free") {
-      rows = rows.filter((client) => normalise(client.planKey) === "free");
-    } else if (state.filter === "paid") {
-      rows = rows.filter((client) => normalise(client.planKey) !== "free");
-    } else if (state.filter === "duplicates") {
-      rows = rows.filter((client) => Boolean(client.duplicateEmail));
-    }
-
-    if (q) {
-      rows = rows.filter((client) => {
-        const haystack = [
-          client.workspaceLabel,
-          client.workspaceId,
-          client.billingEmail,
-          client.planKey,
-          client.subscriptionStatus,
-          client.provider,
-          client.stripeSubscriptionId,
-          client.customerId
-        ].map(normalise).join(" ");
-
-        return haystack.includes(q);
-      });
-    }
-
-    return rows;
-  }
-
-  function stats() {
-    const clients = state.clients;
+  function normalizeClient(client) {
     return {
-      total: clients.length,
-      duplicates: Object.keys(state.duplicates || {}).length,
-      free: clients.filter((client) => normalise(client.planKey) === "free").length,
-      paid: clients.filter(isPaid).length,
+      workspaceId: client.workspaceId || client.workspace_id || "",
+      workspaceLabel: client.workspaceLabel || client.workspace_label || client.name || client.workspaceId || "Workspace",
+      billingEmail: client.billingEmail || client.billing_email || client.email || "",
+      planKey: lower(client.planKey || client.plan_key || client.plan || "free") || "free",
+      subscriptionStatus: lower(client.subscriptionStatus || client.subscription_status || client.status || "active") || "active",
+      provider: lower(client.provider || "internal") || "internal",
+      memberCount: Number(client.memberCount ?? client.member_count ?? 0) || 0,
+      stripeSubscriptionId: client.stripeSubscriptionId || client.stripe_subscription_id || client.subscriptionId || "",
+      activeStripeSubscription: truthy(client.activeStripeSubscription) || lower(client.provider) === "stripe",
+      duplicateEmail: truthy(client.duplicateEmail),
     };
   }
 
+  function filteredClients() {
+    const query = lower(state.query);
+
+    return state.clients.filter((client) => {
+      if (state.filter === "free" && client.planKey !== "free") return false;
+      if (state.filter === "paid" && client.planKey === "free") return false;
+      if (state.filter === "duplicates" && !client.duplicateEmail) return false;
+
+      if (!query) return true;
+
+      const blob = [
+        client.workspaceId,
+        client.workspaceLabel,
+        client.billingEmail,
+        client.planKey,
+        client.subscriptionStatus,
+        client.provider,
+        client.stripeSubscriptionId,
+      ].join(" ").toLowerCase();
+
+      return blob.includes(query);
+    });
+  }
+
   function statsHtml() {
-    const s = stats();
+    const active = state.clients.filter((c) => c.subscriptionStatus !== "archived").length;
+    const duplicates = state.clients.filter((c) => c.duplicateEmail).length;
+    const free = state.clients.filter((c) => c.planKey === "free").length;
+    const paid = state.clients.filter((c) => c.planKey !== "free").length;
 
     return `
-      <div class="smx-admin-scale-stats">
-        <div class="smx-admin-scale-stat">
-          <div class="smx-admin-scale-stat-label">Active clients</div>
-          <div class="smx-admin-scale-stat-value">${s.total}</div>
-        </div>
-        <div class="smx-admin-scale-stat">
-          <div class="smx-admin-scale-stat-label">Duplicate emails</div>
-          <div class="smx-admin-scale-stat-value">${s.duplicates}</div>
-        </div>
-        <div class="smx-admin-scale-stat">
-          <div class="smx-admin-scale-stat-label">Free</div>
-          <div class="smx-admin-scale-stat-value">${s.free}</div>
-        </div>
-        <div class="smx-admin-scale-stat">
-          <div class="smx-admin-scale-stat-label">Paid / legacy</div>
-          <div class="smx-admin-scale-stat-value">${s.paid}</div>
-        </div>
+      <div class="smx-stats">
+        <div class="smx-stat"><div class="smx-stat-label">Active clients</div><div class="smx-stat-value">${active}</div></div>
+        <div class="smx-stat"><div class="smx-stat-label">Duplicate emails</div><div class="smx-stat-value">${duplicates}</div></div>
+        <div class="smx-stat"><div class="smx-stat-label">Free</div><div class="smx-stat-value">${free}</div></div>
+        <div class="smx-stat"><div class="smx-stat-label">Paid / legacy</div><div class="smx-stat-value">${paid}</div></div>
       </div>
     `;
   }
 
   function toolbarHtml() {
     return `
-      <div class="smx-admin-scale-toolbar">
-        <input class="smx-admin-scale-input" id="smxScaleSearch" placeholder="Search email, workspace, plan, provider..." value="${esc(state.query)}">
-        <select class="smx-admin-scale-select" id="smxScaleFilter">
+      <div class="smx-toolbar">
+        <input id="smxCleanupSearch" placeholder="Search email, workspace, plan, provider..." value="${esc(state.query)}">
+        <select id="smxCleanupFilter">
           <option value="all" ${state.filter === "all" ? "selected" : ""}>All active</option>
-          <option value="free" ${state.filter === "free" ? "selected" : ""}>Free only</option>
+          <option value="free" ${state.filter === "free" ? "selected" : ""}>Free</option>
           <option value="paid" ${state.filter === "paid" ? "selected" : ""}>Paid / legacy</option>
           <option value="duplicates" ${state.filter === "duplicates" ? "selected" : ""}>Duplicates</option>
         </select>
-        <select class="smx-admin-scale-select" id="smxScalePageSize">
-          ${[10, 25, 50, 100].map((size) => `
-            <option value="${size}" ${state.pageSize === size ? "selected" : ""}>${size} / page</option>
-          `).join("")}
+        <select id="smxCleanupPageSize">
+          ${[10, 25, 50, 100].map((size) => `<option value="${size}" ${state.pageSize === size ? "selected" : ""}>${size} / page</option>`).join("")}
         </select>
-        <button type="button" class="smx-admin-scale-btn" id="smxScaleRefresh">Refresh</button>
+        <button type="button" class="smx-btn" id="smxCleanupRefresh">Refresh</button>
       </div>
     `;
   }
 
-  function rowHtml(client) {
-    const duplicate = Boolean(client.duplicateEmail);
-    const activeStripe = Boolean(client.activeStripeSubscription);
-    const plan = String(client.planKey || "free");
-    const status = String(client.subscriptionStatus || "active");
-
-    const deleteButton = activeStripe
-      ? `<button type="button" class="smx-admin-scale-btn smx-admin-scale-danger" disabled>Blocked</button>`
-      : `<button type="button" class="smx-admin-scale-btn smx-admin-scale-danger" data-scale-archive="${esc(client.workspaceId)}">Delete</button>`;
-
-    return `
-      <tr>
-        <td class="smx-admin-main-cell">
-          <strong>${esc(client.workspaceLabel || "Client workspace")}</strong>
-          <div class="smx-admin-muted">${esc(client.workspaceId || "")}</div>
-        </td>
-        <td>
-          <div class="smx-admin-email">${esc(client.billingEmail || "—")}</div>
-          ${duplicate ? `<span class="smx-admin-badge smx-admin-badge-warning">Duplicate</span>` : ""}
-        </td>
-        <td><span class="smx-admin-badge smx-admin-badge-plan">${esc(plan)}</span></td>
-        <td><span class="smx-admin-badge">${esc(status)}</span></td>
-        <td>${esc(client.provider || "internal")}</td>
-        <td>${esc(client.memberCount ?? 0)}</td>
-        <td>
-          <div class="smx-admin-muted">${esc(client.stripeSubscriptionId || "—")}</div>
-        </td>
-        <td>
-          <div class="smx-admin-row-actions">
-            ${deleteButton}
-            <button type="button" class="smx-admin-scale-btn smx-admin-scale-ghost" data-scale-sync="${esc(client.workspaceId)}">Sync</button>
-          </div>
-        </td>
-      </tr>
-    `;
-  }
-
   function tableHtml(rows) {
+    if (state.loading) {
+      return `<div class="smx-message">Loading clients...</div>`;
+    }
+
+    if (state.error) {
+      return `<div class="smx-message error">${esc(state.error)}</div>`;
+    }
+
     if (!rows.length) {
-      return `<div class="smx-admin-empty">No clients match the current filter.</div>`;
+      return `<div class="smx-message">No clients match the current filter.</div>`;
     }
 
     const totalPages = Math.max(1, Math.ceil(rows.length / state.pageSize));
-
-    if (state.page > totalPages) state.page = totalPages;
-    if (state.page < 1) state.page = 1;
+    state.page = Math.min(Math.max(1, state.page), totalPages);
 
     const start = (state.page - 1) * state.pageSize;
-    const pageRows = rows.slice(start, start + state.pageSize);
+    const visible = rows.slice(start, start + state.pageSize);
+
+    const body = visible.map((client) => {
+      const stripeText = client.stripeSubscriptionId || "—";
+      const deleteDisabled = client.activeStripeSubscription;
+      const deleteLabel = deleteDisabled ? "Blocked" : "Delete";
+      const deleteClass = deleteDisabled ? "smx-btn blocked" : "smx-btn danger";
+
+      return `
+        <tr>
+          <td>
+            <strong>${esc(client.workspaceLabel)}</strong><br>
+            <span class="smx-small">${esc(client.workspaceId)}</span>
+          </td>
+          <td>
+            <strong>${esc(client.billingEmail || "—")}</strong>
+            ${client.duplicateEmail ? `<br><span class="smx-small" style="color:#ffdc7a;font-weight:900;">Duplicate email</span>` : ""}
+          </td>
+          <td><span class="smx-badge">${esc(client.planKey)}</span></td>
+          <td><span class="smx-badge info">${esc(client.subscriptionStatus)}</span></td>
+          <td>${esc(client.provider)}</td>
+          <td>${esc(client.memberCount)}</td>
+          <td><span class="smx-small">${esc(stripeText)}</span></td>
+          <td>
+            <div class="smx-actions">
+              <button type="button" class="${deleteClass}" ${deleteDisabled ? "disabled" : ""} data-cleanup-delete="${esc(client.workspaceId)}">${deleteLabel}</button>
+              <button type="button" class="smx-btn secondary" data-cleanup-sync="${esc(client.workspaceId)}">Sync</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join("");
 
     return `
-      <div class="smx-admin-table-wrap">
-        <table class="smx-admin-client-table">
+      <div class="smx-table-wrap">
+        <table>
           <thead>
             <tr>
               <th>Workspace</th>
@@ -1305,65 +835,95 @@
               <th>Provider</th>
               <th>Members</th>
               <th>Stripe subscription</th>
-              <th style="text-align:right;">Actions</th>
+              <th>Actions</th>
             </tr>
           </thead>
-          <tbody>
-            ${pageRows.map(rowHtml).join("")}
-          </tbody>
+          <tbody>${body}</tbody>
         </table>
       </div>
-
-      <div class="smx-admin-scale-footer">
-        <div>
-          Showing <strong>${rows.length ? start + 1 : 0}</strong>–<strong>${Math.min(start + state.pageSize, rows.length)}</strong>
-          of <strong>${rows.length}</strong> filtered clients
-        </div>
-        <div class="smx-admin-page-controls">
-          <button type="button" class="smx-admin-scale-btn smx-admin-scale-ghost" id="smxScalePrev" ${state.page <= 1 ? "disabled" : ""}>Prev</button>
+      <div class="smx-pagination">
+        <span>Showing <strong>${rows.length ? start + 1 : 0}</strong>–<strong>${Math.min(start + visible.length, rows.length)}</strong> of <strong>${rows.length}</strong> filtered clients</span>
+        <div class="smx-page-buttons">
+          <button type="button" class="smx-btn secondary" id="smxCleanupPrev" ${state.page <= 1 ? "disabled" : ""}>Prev</button>
           <span>Page <strong>${state.page}</strong> of <strong>${totalPages}</strong></span>
-          <button type="button" class="smx-admin-scale-btn smx-admin-scale-ghost" id="smxScaleNext" ${state.page >= totalPages ? "disabled" : ""}>Next</button>
+          <button type="button" class="smx-btn secondary" id="smxCleanupNext" ${state.page >= totalPages ? "disabled" : ""}>Next</button>
         </div>
       </div>
     `;
   }
 
-  function shellHtml(bodyHtml) {
+  function shellHtml() {
+    const rows = filteredClients();
+
     return `
-      <div class="smx-admin-scale-shell">
-        <div class="smx-admin-scale-head">
+      <div class="smx-cleanup-shell">
+        <div class="smx-cleanup-head">
           <div>
-            <p class="smx-admin-scale-kicker">SyntaxMatrix Admin</p>
-            <h2 class="smx-admin-scale-title">Client Cleanup</h2>
-            <p class="smx-admin-scale-subtitle">
-              Use search, filters and pagination to manage many client workspaces without crowding the page.
-            </p>
+            <p class="smx-kicker">SyntaxMatrix Admin</p>
+            <h1>Client Cleanup</h1>
+            <p class="smx-subtitle">Use search, filters and pagination to manage client workspaces without crowding the page.</p>
           </div>
-          <button type="button" class="smx-admin-scale-btn" id="smxScaleTopRefresh">Refresh</button>
+          <button type="button" class="smx-btn" id="smxCleanupTopRefresh">Refresh</button>
         </div>
 
         ${statsHtml()}
         ${toolbarHtml()}
-        <div id="smxScaleBody">${bodyHtml}</div>
+        <div id="smxCleanupTableRegion">${tableHtml(rows)}</div>
 
-        <div class="smx-admin-manual-sync">
-          <h3>Manual Stripe reconcile</h3>
-          <p>Use this when Stripe payment succeeded but the local workspace plan did not update. Paste cs_, sub_, pi_, or cus_. Paste cs_, sub_, pi_, or cus_. Paste cs_, sub_, pi_, or cus_.</p>
-          <div class="smx-admin-sync-form">
-            <input class="smx-admin-scale-input" id="smxScaleReconcileWorkspaceId" placeholder="Workspace ID">
-            <input class="smx-admin-scale-input" id="smxScaleReconcileSessionId" placeholder="Stripe ID: cs_, sub_, pi_, or cus_...">
-            <button type="button" class="smx-admin-scale-btn" id="smxScaleReconcileBtn">Reconcile</button>
+        <div class="smx-manual">
+          <h2>Manual Stripe reconcile</h2>
+          <p>Use this when Stripe payment succeeded but the local workspace plan did not update. Paste cs_, sub_, pi_, or cus_.</p>
+          <div class="smx-manual-form">
+            <input id="smxCleanupReconcileWorkspaceId" placeholder="Workspace ID">
+            <input id="smxCleanupReconcileStripeId" placeholder="Stripe ID: cs_, sub_, pi_, or cus_...">
+            <button type="button" class="smx-btn" id="smxCleanupReconcileBtn">Reconcile</button>
           </div>
         </div>
       </div>
     `;
   }
 
-  function bindEvents(root) {
-    root.querySelector("#smxScaleTopRefresh")?.addEventListener("click", loadAndRender);
-    root.querySelector("#smxScaleRefresh")?.addEventListener("click", loadAndRender);
+  function render(options = {}) {
+    injectStyle();
 
-    root.querySelector("#smxScaleSearch")?.addEventListener("input", (event) => {
+    const root = ensureRoot();
+    root.innerHTML = shellHtml();
+
+    bind(root);
+
+    if (options.focusSearch) {
+      const input = root.querySelector("#smxCleanupSearch");
+      if (input) {
+        input.focus();
+        const pos = Math.min(options.cursorPosition ?? input.value.length, input.value.length);
+        try { input.setSelectionRange(pos, pos); } catch (_) {}
+      }
+    }
+  }
+
+  async function loadClients() {
+    state.loading = true;
+    state.error = "";
+    render();
+
+    try {
+      const payload = await apiJson(`/api/admin/client-lifecycle?t=${Date.now()}`);
+      state.clients = (payload.clients || []).map(normalizeClient);
+      state.page = 1;
+      state.error = "";
+    } catch (error) {
+      state.error = error.message || String(error);
+    } finally {
+      state.loading = false;
+      render();
+    }
+  }
+
+  function bind(root) {
+    root.querySelector("#smxCleanupTopRefresh")?.addEventListener("click", loadClients);
+    root.querySelector("#smxCleanupRefresh")?.addEventListener("click", loadClients);
+
+    root.querySelector("#smxCleanupSearch")?.addEventListener("input", (event) => {
       state.query = event.target.value || "";
       state.page = 1;
 
@@ -1372,43 +932,37 @@
           ? event.target.selectionStart
           : state.query.length;
 
-      if (state.searchRenderTimer) {
-        clearTimeout(state.searchRenderTimer);
-      }
-
-      state.searchRenderTimer = setTimeout(() => {
-        renderFromState({
-          focusSearch: true,
-          cursorPosition,
-        });
-      }, 180);
+      if (state.searchTimer) clearTimeout(state.searchTimer);
+      state.searchTimer = setTimeout(() => render({focusSearch: true, cursorPosition}), 120);
     });
 
-    root.querySelector("#smxScaleFilter")?.addEventListener("change", (event) => {
+    root.querySelector("#smxCleanupFilter")?.addEventListener("change", (event) => {
       state.filter = event.target.value || "all";
       state.page = 1;
-      renderFromState();
+      render();
     });
 
-    root.querySelector("#smxScalePageSize")?.addEventListener("change", (event) => {
+    root.querySelector("#smxCleanupPageSize")?.addEventListener("change", (event) => {
       state.pageSize = Number(event.target.value || 25) || 25;
       state.page = 1;
-      renderFromState();
+      render();
     });
 
-    root.querySelector("#smxScalePrev")?.addEventListener("click", () => {
+    root.querySelector("#smxCleanupPrev")?.addEventListener("click", () => {
       state.page = Math.max(1, state.page - 1);
-      renderFromState();
+      render();
     });
 
-    root.querySelector("#smxScaleNext")?.addEventListener("click", () => {
+    root.querySelector("#smxCleanupNext")?.addEventListener("click", () => {
       state.page += 1;
-      renderFromState();
+      render();
     });
 
-    root.querySelectorAll("[data-scale-archive]").forEach((button) => {
+    root.querySelectorAll("[data-cleanup-delete]").forEach((button) => {
       button.addEventListener("click", async () => {
-        const workspaceId = button.getAttribute("data-scale-archive");
+        const workspaceId = button.getAttribute("data-cleanup-delete") || "";
+
+        if (!workspaceId) return;
 
         if (!window.confirm(`Delete/archive this client workspace?\n\n${workspaceId}\n\nThis is a soft delete.`)) {
           return;
@@ -1418,114 +972,669 @@
         button.textContent = "Deleting...";
 
         try {
-          await postJson(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/archive`, {
-            reason: "admin_client_cleanup"
+          await apiJson(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/archive`, {
+            method: "POST",
+            body: {reason: "admin_client_cleanup"},
           });
-          await loadAndRender();
+          await loadClients();
         } catch (error) {
-          alert(error.message);
+          alert(error.message || String(error));
           button.disabled = false;
           button.textContent = "Delete";
         }
       });
     });
 
-    root.querySelectorAll("[data-scale-sync]").forEach((button) => {
+    root.querySelectorAll("[data-cleanup-sync]").forEach((button) => {
       button.addEventListener("click", async () => {
-        const workspaceId = button.getAttribute("data-scale-sync");
+        const workspaceId = button.getAttribute("data-cleanup-sync") || "";
+
+        if (!workspaceId) return;
 
         button.disabled = true;
         button.textContent = "Syncing...";
 
         try {
-          await postJson("/api/admin/billing/sync", { workspaceId });
-          await loadAndRender();
+          await apiJson("/api/admin/billing/sync", {
+            method: "POST",
+            body: {workspaceId},
+          });
+          await loadClients();
         } catch (error) {
-          alert(error.message);
+          alert(error.message || String(error));
           button.disabled = false;
           button.textContent = "Sync";
         }
       });
     });
 
-    root.querySelector("#smxScaleReconcileBtn")?.addEventListener("click", async () => {
-      const workspaceId = root.querySelector("#smxScaleReconcileWorkspaceId")?.value?.trim() || "";
-      const sessionId = root.querySelector("#smxScaleReconcileSessionId")?.value?.trim() || "";
+    root.querySelector("#smxCleanupReconcileBtn")?.addEventListener("click", async () => {
+      const workspaceId = root.querySelector("#smxCleanupReconcileWorkspaceId")?.value?.trim() || "";
+      const stripeId = root.querySelector("#smxCleanupReconcileStripeId")?.value?.trim() || "";
 
-      if (!workspaceId || !sessionId) {
+      if (!workspaceId || !stripeId) {
         alert("Workspace ID and Stripe ID are required. Use cs_, sub_, pi_, or cus_.");
         return;
       }
 
-      const button = root.querySelector("#smxScaleReconcileBtn");
+      const button = root.querySelector("#smxCleanupReconcileBtn");
       button.disabled = true;
       button.textContent = "Reconciling...";
 
       try {
-        await postJson("/api/admin/billing/sync", { workspaceId, stripeId: sessionId });
-        await loadAndRender();
+        await apiJson("/api/admin/billing/sync", {
+          method: "POST",
+          body: {workspaceId, stripeId},
+        });
+        await loadClients();
       } catch (error) {
-        alert(error.message);
+        alert(error.message || String(error));
         button.disabled = false;
         button.textContent = "Reconcile";
       }
     });
   }
 
-  function renderFromState(options = {}) {
+  function boot() {
     injectStyle();
+    ensureRoot();
+    loadClients();
+  }
 
-    const root = mountRoot();
-    const rows = filteredClients();
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => setTimeout(boot, 500));
+  } else {
+    setTimeout(boot, 500);
+  }
 
-    root.innerHTML = shellHtml(tableHtml(rows));
-    bindEvents(root);
+  window.SMX_RENDER_ADMIN_CLIENT_CLEANUP_STANDALONE = loadClients;
+})();
+// <<< SMX_ADMIN_CLEANUP_STANDALONE_V1 <<<
 
-    if (options.focusSearch) {
-      const input = root.querySelector("#smxScaleSearch");
+// >>> SMX_ADMIN_TABLE_FIT_NO_OVERFLOW >>>
+(function smxAdminTableFitNoOverflow() {
+  const STYLE_ID = "smx-admin-table-fit-no-overflow-style";
 
-      if (input) {
-        const pos = Math.min(
-          Number.isFinite(options.cursorPosition) ? options.cursorPosition : input.value.length,
-          input.value.length
-        );
+  function injectStyle() {
+    const old = document.getElementById(STYLE_ID);
+    if (old) old.remove();
 
-        input.focus();
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+      /* Fix the actual admin cleanup table. No forced desktop/mobile hacks. */
+      #smxAdminClientCleanupStandalone,
+      .smx-admin-scale-shell {
+        max-width: calc(100vw - 48px) !important;
+        overflow: hidden !important;
+      }
 
-        try {
-          input.setSelectionRange(pos, pos);
-        } catch (_) {
-          // Some browsers/input types may not support selection range.
+      #smxAdminClientCleanupStandalone .smx-table-wrap,
+      .smx-admin-scale-shell #smxScaleBody {
+        width: 100% !important;
+        max-width: 100% !important;
+        overflow-x: hidden !important;
+        overflow-y: visible !important;
+      }
+
+      #smxAdminClientCleanupStandalone table,
+      .smx-admin-scale-shell #smxScaleBody table {
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        table-layout: fixed !important;
+        border-collapse: collapse !important;
+      }
+
+      #smxAdminClientCleanupStandalone th,
+      #smxAdminClientCleanupStandalone td,
+      .smx-admin-scale-shell #smxScaleBody th,
+      .smx-admin-scale-shell #smxScaleBody td {
+        min-width: 0 !important;
+        max-width: 1px !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+      }
+
+      #smxAdminClientCleanupStandalone th:nth-child(1),
+      #smxAdminClientCleanupStandalone td:nth-child(1),
+      .smx-admin-scale-shell #smxScaleBody th:nth-child(1),
+      .smx-admin-scale-shell #smxScaleBody td:nth-child(1) {
+        width: 18% !important;
+      }
+
+      #smxAdminClientCleanupStandalone th:nth-child(2),
+      #smxAdminClientCleanupStandalone td:nth-child(2),
+      .smx-admin-scale-shell #smxScaleBody th:nth-child(2),
+      .smx-admin-scale-shell #smxScaleBody td:nth-child(2) {
+        width: 19% !important;
+      }
+
+      #smxAdminClientCleanupStandalone th:nth-child(3),
+      #smxAdminClientCleanupStandalone td:nth-child(3),
+      .smx-admin-scale-shell #smxScaleBody th:nth-child(3),
+      .smx-admin-scale-shell #smxScaleBody td:nth-child(3) {
+        width: 8% !important;
+      }
+
+      #smxAdminClientCleanupStandalone th:nth-child(4),
+      #smxAdminClientCleanupStandalone td:nth-child(4),
+      .smx-admin-scale-shell #smxScaleBody th:nth-child(4),
+      .smx-admin-scale-shell #smxScaleBody td:nth-child(4) {
+        width: 8% !important;
+      }
+
+      #smxAdminClientCleanupStandalone th:nth-child(5),
+      #smxAdminClientCleanupStandalone td:nth-child(5),
+      .smx-admin-scale-shell #smxScaleBody th:nth-child(5),
+      .smx-admin-scale-shell #smxScaleBody td:nth-child(5) {
+        width: 9% !important;
+      }
+
+      #smxAdminClientCleanupStandalone th:nth-child(6),
+      #smxAdminClientCleanupStandalone td:nth-child(6),
+      .smx-admin-scale-shell #smxScaleBody th:nth-child(6),
+      .smx-admin-scale-shell #smxScaleBody td:nth-child(6) {
+        width: 7% !important;
+        text-align: center !important;
+      }
+
+      #smxAdminClientCleanupStandalone th:nth-child(7),
+      #smxAdminClientCleanupStandalone td:nth-child(7),
+      .smx-admin-scale-shell #smxScaleBody th:nth-child(7),
+      .smx-admin-scale-shell #smxScaleBody td:nth-child(7) {
+        width: 17% !important;
+      }
+
+      #smxAdminClientCleanupStandalone th:nth-child(8),
+      #smxAdminClientCleanupStandalone td:nth-child(8),
+      .smx-admin-scale-shell #smxScaleBody th:nth-child(8),
+      .smx-admin-scale-shell #smxScaleBody td:nth-child(8) {
+        width: 14% !important;
+        position: static !important;
+        right: auto !important;
+        box-shadow: none !important;
+      }
+
+      #smxAdminClientCleanupStandalone .smx-actions,
+      .smx-admin-scale-shell .smx-actions {
+        display: flex !important;
+        gap: 8px !important;
+        justify-content: flex-end !important;
+        min-width: 0 !important;
+      }
+
+      #smxAdminClientCleanupStandalone .smx-actions button,
+      .smx-admin-scale-shell .smx-actions button,
+      .smx-admin-scale-shell #smxScaleBody td:last-child button {
+        min-width: 74px !important;
+        width: auto !important;
+        max-width: 92px !important;
+        padding-left: 10px !important;
+        padding-right: 10px !important;
+        font-size: 14px !important;
+      }
+
+      #smxAdminClientCleanupStandalone .smx-small,
+      .smx-admin-scale-shell .smx-small {
+        display: inline-block !important;
+        max-width: 100% !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        vertical-align: bottom !important;
+      }
+
+      @media (max-width: 900px) {
+        #smxAdminClientCleanupStandalone .smx-table-wrap,
+        .smx-admin-scale-shell #smxScaleBody {
+          overflow-x: auto !important;
+        }
+
+        #smxAdminClientCleanupStandalone table,
+        .smx-admin-scale-shell #smxScaleBody table {
+          min-width: 980px !important;
         }
       }
-    }
+    `;
+
+    document.head.appendChild(style);
   }
 
-  async function loadAndRender() {
+  function applyTitles() {
+    const roots = [
+      document.getElementById("smxAdminClientCleanupStandalone"),
+      document.querySelector(".smx-admin-scale-shell"),
+    ].filter(Boolean);
+
+    roots.forEach((root) => {
+      root.querySelectorAll("td, th, .smx-small, strong").forEach((node) => {
+        const text = (node.textContent || "").trim();
+        if (text && !node.getAttribute("title")) {
+          node.setAttribute("title", text);
+        }
+      });
+    });
+  }
+
+  function apply() {
     injectStyle();
-
-    const root = mountRoot();
-    root.innerHTML = shellHtml(`<div class="smx-admin-empty">Loading clients...</div>`);
-    bindEvents(root);
-
-    try {
-      const payload = await getJson(`/api/admin/client-lifecycle?t=${Date.now()}`);
-
-      state.clients = payload.clients || [];
-      state.duplicates = payload.duplicates || {};
-      state.page = 1;
-
-      renderFromState();
-    } catch (error) {
-      root.innerHTML = shellHtml(`<div class="smx-admin-error">${esc(error.message || error)}</div>`);
-      bindEvents(root);
-    }
+    applyTitles();
   }
 
-  document.addEventListener("DOMContentLoaded", () => {
-    setTimeout(loadAndRender, 1900);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => setTimeout(apply, 300));
+  } else {
+    setTimeout(apply, 300);
+  }
+
+  setTimeout(apply, 1000);
+  setTimeout(apply, 2200);
+
+  const observer = new MutationObserver(() => {
+    clearTimeout(window.__smxAdminTableFitTimer);
+    window.__smxAdminTableFitTimer = setTimeout(applyTitles, 120);
   });
 
-  window.SMX_RENDER_ADMIN_CLIENT_CLEANUP_SCALABLE = loadAndRender;
+  observer.observe(document.documentElement, {childList: true, subtree: true});
 })();
-// <<< SMX_ADMIN_CLIENT_CLEANUP_SCALABLE_UI <<<
+// <<< SMX_ADMIN_TABLE_FIT_NO_OVERFLOW <<<
+
+// >>> SMX_ADMIN_CLEANUP_PARENT_WIDTH_FIX >>>
+(function smxAdminCleanupParentWidthFix() {
+  const STYLE_ID = "smx-admin-cleanup-parent-width-fix-style";
+
+  function injectStyle() {
+    const old = document.getElementById(STYLE_ID);
+    if (old) old.remove();
+
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+      /*
+        The cleanup shell lives inside an existing admin page container.
+        It must fit that parent, not calculate width from 100vw.
+      */
+      .smx-admin-scale-shell,
+      #smxAdminClientCleanupStandalone {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+        overflow: hidden !important;
+      }
+
+      .smx-admin-scale-shell {
+        padding-left: clamp(18px, 2vw, 28px) !important;
+        padding-right: clamp(18px, 2vw, 28px) !important;
+      }
+
+      .smx-admin-scale-head {
+        width: 100% !important;
+        max-width: 100% !important;
+        grid-template-columns: minmax(0, 1fr) 132px !important;
+      }
+
+      #smxScaleTopRefresh,
+      #smxScaleRefresh,
+      #smxCleanupTopRefresh,
+      #smxCleanupRefresh {
+        width: 132px !important;
+        max-width: 132px !important;
+        min-width: 132px !important;
+        padding-left: 10px !important;
+        padding-right: 10px !important;
+      }
+
+      .smx-admin-scale-toolbar-wrap,
+      .smx-admin-scale-toolbar-wrap > *,
+      #smxScaleBody,
+      .smx-table-wrap {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+      }
+
+      .smx-admin-scale-toolbar-wrap > * {
+        grid-template-columns: minmax(220px, 1fr) 190px 160px 132px !important;
+      }
+
+      #smxScaleBody table,
+      #smxAdminClientCleanupStandalone table {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        table-layout: fixed !important;
+      }
+
+      #smxScaleBody th,
+      #smxScaleBody td,
+      #smxAdminClientCleanupStandalone th,
+      #smxAdminClientCleanupStandalone td {
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+      }
+
+      #smxScaleBody th:last-child,
+      #smxScaleBody td:last-child,
+      #smxAdminClientCleanupStandalone th:last-child,
+      #smxAdminClientCleanupStandalone td:last-child {
+        width: 150px !important;
+        min-width: 150px !important;
+        max-width: 150px !important;
+        position: static !important;
+        right: auto !important;
+        box-shadow: none !important;
+      }
+
+      #smxScaleBody td:last-child button,
+      #smxAdminClientCleanupStandalone td:last-child button {
+        min-width: 64px !important;
+        max-width: 76px !important;
+        padding-left: 8px !important;
+        padding-right: 8px !important;
+        font-size: 13px !important;
+      }
+
+      .smx-admin-manual-sync,
+      .smx-admin-sync-form,
+      .smx-manual,
+      .smx-manual-form {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+      }
+
+      .smx-admin-sync-form,
+      .smx-manual-form {
+        grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.2fr) 132px !important;
+      }
+
+      #smxScaleReconcileBtn,
+      #smxCleanupReconcileBtn {
+        width: 132px !important;
+        max-width: 132px !important;
+        min-width: 132px !important;
+      }
+
+      @media (max-width: 920px) {
+        .smx-admin-scale-head,
+        .smx-admin-scale-toolbar-wrap > *,
+        .smx-admin-sync-form,
+        .smx-manual-form {
+          grid-template-columns: 1fr !important;
+        }
+
+        #smxScaleTopRefresh,
+        #smxScaleRefresh,
+        #smxCleanupTopRefresh,
+        #smxCleanupRefresh,
+        #smxScaleReconcileBtn,
+        #smxCleanupReconcileBtn {
+          width: 100% !important;
+          max-width: 100% !important;
+          min-width: 0 !important;
+        }
+
+        #smxScaleBody,
+        .smx-table-wrap {
+          overflow-x: auto !important;
+        }
+
+        #smxScaleBody table,
+        #smxAdminClientCleanupStandalone table {
+          min-width: 900px !important;
+        }
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+
+  function applyTitles() {
+    document
+      .querySelectorAll(".smx-admin-scale-shell td, .smx-admin-scale-shell th, #smxAdminClientCleanupStandalone td, #smxAdminClientCleanupStandalone th")
+      .forEach((node) => {
+        const txt = (node.textContent || "").trim();
+        if (txt && !node.title) node.title = txt;
+      });
+  }
+
+  function apply() {
+    injectStyle();
+    applyTitles();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => setTimeout(apply, 300));
+  } else {
+    setTimeout(apply, 300);
+  }
+
+  setTimeout(apply, 1000);
+  setTimeout(apply, 2200);
+})();
+// <<< SMX_ADMIN_CLEANUP_PARENT_WIDTH_FIX <<<
+
+// >>> SMX_MOBILE_SYSTEM_VOICE_LIST_GLOBAL_V3 >>>
+(function smxMobileSystemVoiceListGlobalV3() {
+  const STYLE_ID = "smx-mobile-system-voice-list-global-v3-style";
+  const VOICE_NAME_RE = /\b[A-Za-z0-9][A-Za-z0-9 _.'-]{1,48}\s+\([MF]\)\b/;
+
+  function textOf(node) {
+    return (node && (node.innerText || node.textContent || "") || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function injectStyle() {
+    const old = document.getElementById(STYLE_ID);
+    if (old) old.remove();
+
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+      @media (max-width: 820px) {
+        [data-smx-system-voice-card-v3="true"] {
+          display: grid !important;
+          grid-template-columns: minmax(0, 1fr) 46px 46px !important;
+          gap: 10px !important;
+          align-items: center !important;
+          padding: 12px 14px !important;
+          min-height: 72px !important;
+          height: auto !important;
+        }
+
+        [data-smx-system-voice-flatten-v3="true"] {
+          display: contents !important;
+        }
+
+        [data-smx-system-voice-name-v3="true"] {
+          grid-column: 1 !important;
+          grid-row: 1 !important;
+          min-width: 0 !important;
+          max-width: 100% !important;
+          overflow: hidden !important;
+          text-overflow: ellipsis !important;
+          white-space: nowrap !important;
+          font-size: 20px !important;
+          line-height: 1.15 !important;
+          margin: 0 !important;
+          padding: 0 !important;
+        }
+
+        [data-smx-system-voice-play-v3="true"],
+        [data-smx-system-voice-delete-v3="true"] {
+          width: 46px !important;
+          height: 46px !important;
+          min-width: 46px !important;
+          min-height: 46px !important;
+          max-width: 46px !important;
+          max-height: 46px !important;
+          padding: 0 !important;
+          margin: 0 !important;
+          border-radius: 999px !important;
+          display: inline-flex !important;
+          align-items: center !important;
+          justify-content: center !important;
+          overflow: hidden !important;
+          font-size: 0 !important;
+          line-height: 0 !important;
+        }
+
+        [data-smx-system-voice-play-v3="true"] {
+          grid-column: 2 !important;
+          grid-row: 1 !important;
+        }
+
+        [data-smx-system-voice-delete-v3="true"] {
+          grid-column: 3 !important;
+          grid-row: 1 !important;
+        }
+
+        [data-smx-system-voice-play-v3="true"]::before {
+          content: "▶" !important;
+          font-size: 18px !important;
+          line-height: 1 !important;
+        }
+
+        [data-smx-system-voice-delete-v3="true"]::before {
+          content: "🗑" !important;
+          font-size: 17px !important;
+          line-height: 1 !important;
+        }
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+
+  function isLikelyVoiceCard(node) {
+    const text = textOf(node);
+
+    if (!VOICE_NAME_RE.test(text)) return false;
+    if (text.includes("System voices")) return false;
+    if (text.includes("Create system voice")) return false;
+    if (text.includes("Refresh system voices")) return false;
+    if (text.includes("No system voice request")) return false;
+    if (text.includes("Voice source duration")) return false;
+    if (text.includes("Manual Stripe reconcile")) return false;
+
+    const buttons = node.querySelectorAll("button");
+
+    if (buttons.length < 2 || buttons.length > 4) return false;
+
+    const rect = node.getBoundingClientRect();
+
+    if (rect.width < 220 || rect.height < 60) return false;
+
+    return true;
+  }
+
+  function findVoiceCards() {
+    const candidates = Array.from(document.querySelectorAll("div, li, article"))
+      .filter(isLikelyVoiceCard)
+      .sort((a, b) => {
+        const ar = a.getBoundingClientRect();
+        const br = b.getBoundingClientRect();
+        return (textOf(a).length - textOf(b).length) || (ar.height - br.height);
+      });
+
+    const selected = [];
+
+    candidates.forEach((node) => {
+      if (selected.some((existing) => existing.contains(node) || node.contains(existing))) {
+        return;
+      }
+
+      selected.push(node);
+    });
+
+    return selected;
+  }
+
+  function findNameNode(card) {
+    return Array.from(card.querySelectorAll("h1,h2,h3,h4,strong,b,span,div"))
+      .filter((node) => {
+        const text = textOf(node);
+        return VOICE_NAME_RE.test(text) && text.length <= 70;
+      })
+      .sort((a, b) => textOf(a).length - textOf(b).length)[0] || null;
+  }
+
+  function classifyButtons(card) {
+    const buttons = Array.from(card.querySelectorAll("button"));
+
+    const deleteBtn =
+      buttons.find((button) => {
+        const raw = `${textOf(button)} ${button.getAttribute("aria-label") || ""} ${button.title || ""}`.toLowerCase();
+        return raw.includes("delete") || raw.includes("remove") || raw.includes("trash") || raw.includes("🗑");
+      }) || buttons[buttons.length - 1] || null;
+
+    const playBtn =
+      buttons.find((button) => button !== deleteBtn) || buttons[0] || null;
+
+    return {playBtn, deleteBtn};
+  }
+
+  function flattenParents(card, nodes) {
+    nodes.forEach((node) => {
+      let parent = node && node.parentElement;
+
+      while (parent && parent !== card) {
+        parent.setAttribute("data-smx-system-voice-flatten-v3", "true");
+        parent = parent.parentElement;
+      }
+    });
+  }
+
+  function markCards() {
+    findVoiceCards().forEach((card) => {
+      const nameNode = findNameNode(card);
+      const {playBtn, deleteBtn} = classifyButtons(card);
+
+      if (!nameNode || !playBtn || !deleteBtn) return;
+
+      card.setAttribute("data-smx-system-voice-card-v3", "true");
+
+      nameNode.setAttribute("data-smx-system-voice-name-v3", "true");
+      nameNode.title = textOf(nameNode);
+
+      playBtn.setAttribute("data-smx-system-voice-play-v3", "true");
+      playBtn.setAttribute("aria-label", playBtn.getAttribute("aria-label") || "Play preview");
+      playBtn.title = playBtn.title || "Play preview";
+
+      deleteBtn.setAttribute("data-smx-system-voice-delete-v3", "true");
+      deleteBtn.setAttribute("aria-label", deleteBtn.getAttribute("aria-label") || "Delete voice");
+      deleteBtn.title = deleteBtn.title || "Delete voice";
+
+      flattenParents(card, [nameNode, playBtn, deleteBtn]);
+    });
+  }
+
+  function apply() {
+    injectStyle();
+    markCards();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => setTimeout(apply, 300));
+  } else {
+    setTimeout(apply, 300);
+  }
+
+  setTimeout(apply, 900);
+  setTimeout(apply, 1800);
+  setTimeout(apply, 3200);
+
+  const observer = new MutationObserver(() => {
+    clearTimeout(window.__smxMobileSystemVoiceListGlobalV3Timer);
+    window.__smxMobileSystemVoiceListGlobalV3Timer = setTimeout(apply, 120);
+  });
+
+  observer.observe(document.documentElement, {childList: true, subtree: true});
+})();
+// <<< SMX_MOBILE_SYSTEM_VOICE_LIST_GLOBAL_V3 <<<
+
