@@ -593,13 +593,6 @@ Recommended screenshot format:
 - Remove browser bookmarks, unrelated tabs, personal email addresses, customer IDs, subscription IDs, and payment information before publishing.
 - Use demo/test accounts rather than real customer data.
 
-Recommended video format:
-
-- MP4 with H.264 video and AAC audio.
-- 1080p where possible.
-- Two to five minutes.
-- Remove secrets, tokens, payment details, personal data, and browser password-manager overlays.
-
 ---
 
 ## License
