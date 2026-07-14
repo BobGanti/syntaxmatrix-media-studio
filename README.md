@@ -24,8 +24,9 @@
 </p>
 
 <p align="center">
+  ![Chat Sequence diagram](docs/screenshots/01-client-workspace.png)
   <img
-    src="docs/media/screenshots/01-client-workspace.png"
+    src="docs/screenshots/01-client-workspace.png"
     alt="SyntaxMatrix Media Studio client workspace"
     width="100%"
   >
