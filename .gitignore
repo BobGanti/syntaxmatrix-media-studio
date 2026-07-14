@@ -140,3 +140,13 @@ workspaces/mock_user_002/
 txt_sources/
 Misc/*
 
+# >>> README MEDIA ASSET EXCEPTIONS >>>
+# README screenshots and demo media are intentional repository assets.
+!docs/
+!docs/media/
+!docs/media/screenshots/
+!docs/media/screenshots/*.png
+!docs/media/demo/
+!docs/media/demo/demo-thumbnail.png
+!docs/media/demo/*.mp4
+# <<< README MEDIA ASSET EXCEPTIONS <<<
