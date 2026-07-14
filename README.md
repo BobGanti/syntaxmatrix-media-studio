@@ -23,8 +23,8 @@
   <img alt="Firebase" src="https://img.shields.io/badge/Firebase-Authentication-FFCA28?logo=firebase&logoColor=black">
 </p>
 
+## ARRCCHH
 <p align="center">
-  ![Chat Sequence diagram](docs/screenshots/01-client-workspace.png)
   <img
     src="docs/screenshots/01-client-workspace.png"
     alt="SyntaxMatrix Media Studio client workspace"
